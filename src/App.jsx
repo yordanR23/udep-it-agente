@@ -120,6 +120,11 @@ function PrioridadDot({ p }) {
 
 export default function App() {
   const [role, setRole] = useState(null);
+  const [loginRole, setLoginRole] = useState(null);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginAdminKey, setLoginAdminKey] = useState('');
+  const [authError, setAuthError] = useState('');
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -142,10 +147,49 @@ export default function App() {
     localStorage.setItem('udep_tickets', JSON.stringify(tickets));
   }, [tickets]);
 
+  function startLogin(r) {
+    setLoginRole(r);
+    setAuthError('');
+    setLoginEmail('');
+    setLoginPassword('');
+    setLoginAdminKey('');
+  }
+
   function selectRole(r) {
     setRole(r);
     setMessages([{ role: 'assistant', text: ROLES[r].welcome }]);
     setPanel(null);
+  }
+
+  async function handleLoginSubmit() {
+    if (!loginRole) return;
+    setLoading(true);
+    setAuthError('');
+
+    try {
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role: loginRole,
+          email: loginEmail.trim().toLowerCase(),
+          password: loginPassword,
+          adminKey: loginAdminKey,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Error de autenticación');
+      }
+
+      selectRole(loginRole);
+      setLoginRole(null);
+    } catch (error) {
+      setAuthError(error.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function callAgent(messages) {
@@ -217,23 +261,48 @@ export default function App() {
             <span className="role-title">Universidad de Piura</span>
           </div>
           <h1>Agente de Soporte TI</h1>
-          <p>Selecciona tu rol para acceder a las herramientas correspondientes</p>
+          <p>Selecciona tu rol e inicia sesión con tu correo institucional.</p>
         </div>
-        <div className="role-grid">
-          {Object.entries(ROLES).map(([key, r]) => (
-            <button key={key} type="button" className="role-card" onClick={() => selectRole(key)}>
-              <div className="role-card-icon">{r.icon}</div>
-              <div className="role-card-label">{r.label}</div>
-              <div className="role-card-subtitle">{r.subtitle}</div>
-              <div className="role-card-tools">
-                {r.tools.slice(0, 3).map((t) => (
-                  <span key={t} className="tool-chip">{TOOLS_META[t]?.label}</span>
-                ))}
-                {r.tools.length > 3 && <span className="tool-chip more">+{r.tools.length - 3} más</span>}
-              </div>
-            </button>
-          ))}
-        </div>
+
+        {loginRole ? (
+          <div className="login-card">
+            <h2>Acceso para {ROLES[loginRole].label}</h2>
+            <p>Ingresa tu correo y contraseña institucional.</p>
+            <label>Correo institucional</label>
+            <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="usuario@udep.pe" />
+            <label>Contraseña</label>
+            <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Contraseña" />
+            {loginRole === 'admin' && (
+              <>
+                <label>Clave adicional de administrador</label>
+                <input type="password" value={loginAdminKey} onChange={(e) => setLoginAdminKey(e.target.value)} placeholder="Clave de administrador" />
+              </>
+            )}
+            {authError && <div className="auth-error">{authError}</div>}
+            <div className="login-actions">
+              <button type="button" className="primary-button" onClick={handleLoginSubmit}>Ingresar</button>
+              <button type="button" className="secondary-button" onClick={() => { setLoginRole(null); setAuthError(''); }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="role-grid">
+            {Object.entries(ROLES).map(([key, r]) => (
+              <button key={key} type="button" className="role-card" onClick={() => startLogin(key)}>
+                <div className="role-card-icon">{r.icon}</div>
+                <div className="role-card-label">{r.label}</div>
+                <div className="role-card-subtitle">{r.subtitle}</div>
+                <div className="role-card-tools">
+                  {r.tools.slice(0, 3).map((t) => (
+                    <span key={t} className="tool-chip">{TOOLS_META[t]?.label}</span>
+                  ))}
+                  {r.tools.length > 3 && <span className="tool-chip more">+{r.tools.length - 3} más</span>}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     );
   }

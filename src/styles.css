@@ -398,6 +398,64 @@ button {
   cursor: not-allowed;
 }
 
+.secondary-button {
+  background: transparent;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #475569;
+  padding: 10px 20px;
+  font-size: 13px;
+}
+
+.login-card {
+  width: min(520px, 100%);
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.login-card h2 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  font-size: 20px;
+}
+
+.login-card p {
+  margin: 0 0 1rem;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.login-card label {
+  display: block;
+  margin-bottom: 6px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.auth-error {
+  margin-bottom: 12px;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.login-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .kb-search {
   margin-bottom: 10px;
 }
