@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { utils, writeFile } from 'xlsx';
+import { jsPDF } from 'jspdf';
 
 const ROLES = {
   usuario: {
@@ -243,6 +244,169 @@ export default function App() {
     writeFile(workbook, 'udep-tickets.xlsx');
   }
 
+  function createTicketPng(ticket) {
+    const width = 900;
+    const height = 520;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#1f2937';
+    ctx.fillRect(0, 0, width, 90);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '28px sans-serif';
+    ctx.fillText(`Ticket ${ticket.id}`, 30, 52);
+    ctx.font = '18px sans-serif';
+    ctx.fillText(ticket.titulo || 'Sin título', 30, 90);
+
+    const fields = [
+      ['Categoría', ticket.categoria],
+      ['Estado', ticket.estado],
+      ['Prioridad', ticket.prioridad],
+      ['Usuario', ticket.usuario],
+      ['Técnico', ticket.tecnico],
+      ['Fecha', ticket.fecha],
+      ['Descripción', ticket.descripcion],
+    ];
+
+    let y = 140;
+    ctx.fillStyle = '#111827';
+    ctx.font = '16px sans-serif';
+    fields.forEach(([label, value]) => {
+      ctx.fillText(`${label}:`, 30, y);
+      ctx.fillStyle = '#374151';
+      const text = String(value || '—');
+      const maxWidth = 820;
+      const words = text.split(' ');
+      let line = '';
+      for (let n = 0; n < words.length; n += 1) {
+        const testLine = line + words[n] + ' ';
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && n > 0) {
+          ctx.fillText(line.trim(), 150, y);
+          line = `${words[n]} `;
+          y += 24;
+        } else {
+          line = testLine;
+        }
+      }
+      ctx.fillText(line.trim(), 150, y);
+      y += 32;
+      ctx.fillStyle = '#111827';
+    });
+
+    const link = document.createElement('a');
+    link.href = canvas.toDataURL('image/png');
+    link.download = `ticket-${ticket.id}.png`;
+    link.click();
+  }
+
+  function createChartCanvas() {
+    const categories = tickets.reduce((acc, ticket) => {
+      const key = ticket.estado || 'Sin estado';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    const labels = Object.keys(categories);
+    const values = labels.map((label) => categories[label]);
+    const width = 900;
+    const height = 520;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#111827';
+    ctx.font = '24px sans-serif';
+    ctx.fillText('Tickets por estado', 30, 50);
+
+    const maxVal = Math.max(...values, 1);
+    const chartTop = 90;
+    const chartHeight = 340;
+    const chartLeft = 120;
+    const chartWidth = 740;
+    const barWidth = Math.min(80, chartWidth / labels.length - 25);
+
+    labels.forEach((label, index) => {
+      const x = chartLeft + index * (barWidth + 35);
+      const barHeight = (values[index] / maxVal) * (chartHeight - 40);
+      ctx.fillStyle = '#2563eb';
+      ctx.fillRect(x, chartTop + chartHeight - barHeight, barWidth, barHeight);
+      ctx.fillStyle = '#111827';
+      ctx.font = '14px sans-serif';
+      ctx.fillText(values[index], x + 10, chartTop + chartHeight - barHeight - 10);
+      ctx.fillText(label, x, chartTop + chartHeight + 24);
+    });
+
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(chartLeft, chartTop);
+    ctx.lineTo(chartLeft, chartTop + chartHeight);
+    ctx.lineTo(chartLeft + chartWidth, chartTop + chartHeight);
+    ctx.stroke();
+
+    return canvas;
+  }
+
+  function downloadChartPng() {
+    const canvas = createChartCanvas();
+    const link = document.createElement('a');
+    link.href = canvas.toDataURL('image/png');
+    link.download = 'grafico-tickets.png';
+    link.click();
+  }
+
+  async function downloadReportPdf() {
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    doc.setFontSize(18);
+    doc.text('Reporte de tickets', 40, 50);
+    doc.setFontSize(11);
+    doc.text(`Fecha: ${new Date().toLocaleString()}`, 40, 70);
+
+    const statusCounts = tickets.reduce((acc, ticket) => {
+      const key = ticket.estado || 'Sin estado';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    let y = 100;
+    doc.setFontSize(12);
+    Object.entries(statusCounts).forEach(([status, count]) => {
+      doc.text(`${status}: ${count}`, 40, y);
+      y += 18;
+    });
+
+    const canvas = createChartCanvas();
+    const imgData = canvas.toDataURL('image/png');
+    doc.addImage(imgData, 'PNG', 40, y + 20, 520, 260);
+    doc.setFontSize(12);
+    doc.text('Tickets recientes:', 40, y + 300);
+
+    let rowY = y + 320;
+    const columns = ['ID', 'Título', 'Estado', 'Prioridad'];
+    columns.forEach((col, index) => {
+      doc.text(col, 40 + index * 140, rowY);
+    });
+    rowY += 18;
+    tickets.slice(0, 6).forEach((ticket) => {
+      const row = [ticket.id, ticket.titulo, ticket.estado, ticket.prioridad];
+      row.forEach((value, index) => {
+        doc.text(String(value || ''), 40 + index * 140, rowY);
+      });
+      rowY += 18;
+    });
+
+    doc.save('reporte-tickets.pdf');
+  }
+
   async function syncTicketsToSheet(ticketOrTickets) {
     const payload = Array.isArray(ticketOrTickets) ? ticketOrTickets : [ticketOrTickets];
     if (!payload.length) return;
@@ -441,7 +605,7 @@ export default function App() {
                     <table className="ticket-table">
                     <thead>
                       <tr>
-                        {['ID', 'Título', 'Categoría', 'Estado', 'Prioridad', 'Técnico'].map((h) => (
+                        {['ID', 'Título', 'Categoría', 'Estado', 'Prioridad', 'Técnico', 'Acciones'].map((h) => (
                           <th key={h}>{h}</th>
                         ))}
                       </tr>
@@ -455,6 +619,11 @@ export default function App() {
                           <td><TicketBadge estado={t.estado} /></td>
                           <td><PrioridadDot p={t.prioridad} /><span className="priority-label">{t.prioridad}</span></td>
                           <td>{t.tecnico}</td>
+                          <td>
+                            <button type="button" className="secondary-button small-button" onClick={() => createTicketPng(t)}>
+                              Ticket PNG
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -499,6 +668,31 @@ export default function App() {
                     </div>
                   </div>
                 )
+              )}
+
+              {panel === 'reportes' && (
+                <div className="report-card">
+                  <div className="report-card-header">
+                    <div>
+                      <h3>Reportes</h3>
+                      <p>Genera documentos y gráficos de tus tickets.</p>
+                    </div>
+                  </div>
+                  <div className="report-actions-row">
+                    <button type="button" className="primary-button" onClick={downloadReportPdf} disabled={!tickets.length}>
+                      Descargar reporte PDF
+                    </button>
+                    <button type="button" className="secondary-button" onClick={downloadChartPng} disabled={!tickets.length}>
+                      Descargar gráfico PNG
+                    </button>
+                  </div>
+                  <div className="report-summary">
+                    <div>Total de tickets: {tickets.length}</div>
+                    <div>Pendientes: {tickets.filter((t) => t.estado === 'Pendiente').length}</div>
+                    <div>En proceso: {tickets.filter((t) => t.estado === 'En proceso').length}</div>
+                    <div>Resueltos: {tickets.filter((t) => t.estado === 'Resuelto').length}</div>
+                  </div>
+                </div>
               )}
 
               {panel === 'base_conocimiento' && (
