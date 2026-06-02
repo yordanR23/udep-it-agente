@@ -407,6 +407,19 @@ button {
   font-size: 13px;
 }
 
+.ticket-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.sync-status {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #475569;
+}
+
 .login-card {
   width: min(520px, 100%);
   background: white;

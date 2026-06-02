@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { utils, writeFile } from 'xlsx';
 
 const ROLES = {
   usuario: {
@@ -137,6 +138,8 @@ export default function App() {
     const saved = localStorage.getItem('udep_tickets');
     return saved ? JSON.parse(saved) : DEFAULT_TICKETS;
   });
+  const [syncStatus, setSyncStatus] = useState('');
+  const [syncLoading, setSyncLoading] = useState(false);
   const messagesEnd = useRef(null);
 
   useEffect(() => {
@@ -192,6 +195,80 @@ export default function App() {
     }
   }
 
+  function buildCsvText(ticketsToExport) {
+    const header = ['ID', 'Título', 'Categoría', 'Estado', 'Prioridad', 'Usuario', 'Técnico', 'Fecha', 'Descripción'];
+    const rows = ticketsToExport.map((ticket) => [
+      ticket.id,
+      ticket.titulo,
+      ticket.categoria,
+      ticket.estado,
+      ticket.prioridad,
+      ticket.usuario,
+      ticket.tecnico,
+      ticket.fecha,
+      ticket.descripcion,
+    ]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell || '').replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    return csv;
+  }
+
+  function downloadTicketsCsv() {
+    const csvContent = buildCsvText(tickets);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'udep-tickets.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadTicketsXlsx() {
+    const data = tickets.map((ticket) => ({
+      ID: ticket.id,
+      Título: ticket.titulo,
+      Categoría: ticket.categoria,
+      Estado: ticket.estado,
+      Prioridad: ticket.prioridad,
+      Usuario: ticket.usuario,
+      Técnico: ticket.tecnico,
+      Fecha: ticket.fecha,
+      Descripción: ticket.descripcion,
+    }));
+    const worksheet = utils.json_to_sheet(data);
+    const workbook = utils.book_new();
+    utils.book_append_sheet(workbook, worksheet, 'Tickets');
+    writeFile(workbook, 'udep-tickets.xlsx');
+  }
+
+  async function syncTicketsToSheet(ticketOrTickets) {
+    const payload = Array.isArray(ticketOrTickets) ? ticketOrTickets : [ticketOrTickets];
+    if (!payload.length) return;
+
+    setSyncLoading(true);
+    setSyncStatus('Sincronizando con Google Sheets...');
+
+    try {
+      const response = await fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickets: payload }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Error al sincronizar tickets');
+      }
+      setSyncStatus('Tickets sincronizados con Google Sheets.');
+    } catch (error) {
+      setSyncStatus(`Error al sincronizar: ${error.message}`);
+      console.error(error);
+    } finally {
+      setSyncLoading(false);
+    }
+  }
+
   async function callAgent(messages) {
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -241,6 +318,7 @@ export default function App() {
       descripcion: reportForm.descripcion,
     };
     setTickets((prev) => [createdTicket, ...prev]);
+    syncTicketsToSheet(createdTicket);
     setReportSent(newId);
     setTimeout(() => {
       setReportSent(false);
@@ -350,8 +428,17 @@ export default function App() {
               </div>
 
               {(panel === 'ver_tickets' || panel === 'consultar_estado') && (
-                <div className="ticket-table-wrapper">
-                  <table className="ticket-table">
+                <>
+                  <div className="ticket-actions-row">
+                    <button type="button" className="secondary-button" onClick={downloadTicketsCsv}>Exportar CSV</button>
+                    <button type="button" className="primary-button" onClick={downloadTicketsXlsx}>Exportar Excel</button>
+                    <button type="button" className="secondary-button" onClick={() => syncTicketsToSheet(tickets)} disabled={syncLoading}>
+                      {syncLoading ? 'Sincronizando...' : 'Sincronizar con Google Sheets'}
+                    </button>
+                  </div>
+                  {syncStatus && <div className="sync-status">{syncStatus}</div>}
+                  <div className="ticket-table-wrapper">
+                    <table className="ticket-table">
                     <thead>
                       <tr>
                         {['ID', 'Título', 'Categoría', 'Estado', 'Prioridad', 'Técnico'].map((h) => (
@@ -373,6 +460,7 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+              </>
               )}
 
               {panel === 'reportar_incidencia' && (
