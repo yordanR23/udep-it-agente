@@ -25,12 +25,15 @@ function mapTicketRow(ticket) {
     ticket.id || '',
     ticket.titulo || '',
     ticket.categoria || '',
+    ticket.descripcion || '',
     ticket.estado || '',
     ticket.prioridad || '',
-    ticket.usuario || '',
     ticket.tecnico || '',
     ticket.fecha || '',
-    ticket.descripcion || '',
+    ticket.aula || '',
+    ticket.edificio || '',
+    ticket.fechaModificacion || '',
+    ticket.usuario || '',
   ];
 }
 

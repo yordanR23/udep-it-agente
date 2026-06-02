@@ -66,11 +66,11 @@ const TOOLS_META = {
 };
 
 const DEFAULT_TICKETS = [
-  { id: 'TKT-001', titulo: 'Sin acceso a WiFi en Lab B-201', estado: 'abierto', prioridad: 'alta', usuario: 'a.garcia@udep.pe', tecnico: '—', categoria: 'Red', fecha: '2025-05-30' },
-  { id: 'TKT-002', titulo: 'Proyector dañado en aula 3F', estado: 'en_proceso', prioridad: 'media', usuario: 'j.lopez@udep.pe', tecnico: 'M. Torres', categoria: 'Hardware', fecha: '2025-05-29' },
-  { id: 'TKT-003', titulo: 'Contraseña de correo institucional bloqueada', estado: 'resuelto', prioridad: 'media', usuario: 'c.ruiz@udep.pe', tecnico: 'L. Soto', categoria: 'Accesos', fecha: '2025-05-28' },
-  { id: 'TKT-004', titulo: 'No carga el aula virtual (Moodle)', estado: 'abierto', prioridad: 'alta', usuario: 'm.flores@udep.pe', tecnico: '—', categoria: 'Software', fecha: '2025-05-31' },
-  { id: 'TKT-005', titulo: 'Solicitud cuenta VPN para trabajo remoto', estado: 'pendiente', prioridad: 'baja', usuario: 'r.santos@udep.pe', tecnico: 'L. Soto', categoria: 'Accesos', fecha: '2025-05-27' },
+  { id: 'TKT-001', titulo: 'Sin acceso a WiFi en Lab B-201', categoria: 'Red', descripcion: 'No hay conectividad en el laboratorio de cómputo', estado: 'abierto', prioridad: 'alta', usuario: 'a.garcia@udep.pe', tecnico: '—', fecha: '2025-05-30', aula: 'Lab B-201', edificio: 'Bloque B', fechaModificacion: '2025-05-30' },
+  { id: 'TKT-002', titulo: 'Proyector dañado en aula 3F', categoria: 'Hardware', descripcion: 'El proyector no emite imagen', estado: 'en_proceso', prioridad: 'media', usuario: 'j.lopez@udep.pe', tecnico: 'M. Torres', fecha: '2025-05-29', aula: 'Aula 3F', edificio: 'Bloque C', fechaModificacion: '2025-05-31' },
+  { id: 'TKT-003', titulo: 'Contraseña de correo institucional bloqueada', categoria: 'Accesos', descripcion: 'No puedo acceder a mi correo', estado: 'resuelto', prioridad: 'media', usuario: 'c.ruiz@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-28', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-29' },
+  { id: 'TKT-004', titulo: 'No carga el aula virtual (Moodle)', categoria: 'Software', descripcion: 'Plataforma Moodle no accesible', estado: 'abierto', prioridad: 'alta', usuario: 'm.flores@udep.pe', tecnico: '—', fecha: '2025-05-31', aula: 'Aula Virtual', edificio: 'En Línea', fechaModificacion: '2025-05-31' },
+  { id: 'TKT-005', titulo: 'Solicitud cuenta VPN para trabajo remoto', categoria: 'Accesos', descripcion: 'Necesito acceso VPN', estado: 'pendiente', prioridad: 'baja', usuario: 'r.santos@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-27', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-27' },
 ];
 
 const KNOWLEDGE_BASE = [
@@ -131,7 +131,7 @@ export default function App() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [panel, setPanel] = useState(null);
-  const [reportForm, setReportForm] = useState({ titulo: '', categoria: 'Red', descripcion: '', urgencia: 'media' });
+  const [reportForm, setReportForm] = useState({ titulo: '', categoria: 'Red', descripcion: '', urgencia: 'media', aula: '', edificio: '' });
   const [reportSent, setReportSent] = useState(false);
   const [kbSearch, setKbSearch] = useState('');
   const [kbOpen, setKbOpen] = useState(null);
@@ -269,7 +269,10 @@ export default function App() {
       ['Prioridad', ticket.prioridad],
       ['Usuario', ticket.usuario],
       ['Técnico', ticket.tecnico],
+      ['Aula', ticket.aula],
+      ['Edificio', ticket.edificio],
       ['Fecha', ticket.fecha],
+      ['Mod.', ticket.fechaModificacion],
       ['Descripción', ticket.descripcion],
     ];
 
@@ -470,23 +473,27 @@ export default function App() {
 
   function submitReport() {
     const newId = `TKT-${String(tickets.length + 1).padStart(3, '0')}`;
+    const today = new Date().toISOString().slice(0, 10);
     const createdTicket = {
       id: newId,
       titulo: reportForm.titulo,
+      categoria: reportForm.categoria,
+      descripcion: reportForm.descripcion,
       estado: 'abierto',
       prioridad: reportForm.urgencia,
       usuario: 'cliente.udep@udep.pe',
       tecnico: '—',
-      categoria: reportForm.categoria,
-      fecha: new Date().toISOString().slice(0, 10),
-      descripcion: reportForm.descripcion,
+      fecha: today,
+      aula: reportForm.aula,
+      edificio: reportForm.edificio,
+      fechaModificacion: today,
     };
     setTickets((prev) => [createdTicket, ...prev]);
     syncTicketsToSheet(createdTicket);
     setReportSent(newId);
     setTimeout(() => {
       setReportSent(false);
-      setReportForm({ titulo: '', categoria: 'Red', descripcion: '', urgencia: 'media' });
+      setReportForm({ titulo: '', categoria: 'Red', descripcion: '', urgencia: 'media', aula: '', edificio: '' });
       setPanel(null);
     }, 3000);
   }
@@ -605,7 +612,7 @@ export default function App() {
                     <table className="ticket-table">
                     <thead>
                       <tr>
-                        {['ID', 'Título', 'Categoría', 'Estado', 'Prioridad', 'Técnico', 'Acciones'].map((h) => (
+                        {['ID', 'Título', 'Categoría', 'Estado', 'Aula', 'Edificio', 'Prioridad', 'Técnico', 'Acciones'].map((h) => (
                           <th key={h}>{h}</th>
                         ))}
                       </tr>
@@ -617,6 +624,8 @@ export default function App() {
                           <td>{t.titulo}</td>
                           <td>{t.categoria}</td>
                           <td><TicketBadge estado={t.estado} /></td>
+                          <td>{t.aula || '—'}</td>
+                          <td>{t.edificio || '—'}</td>
                           <td><PrioridadDot p={t.prioridad} /><span className="priority-label">{t.prioridad}</span></td>
                           <td>{t.tecnico}</td>
                           <td>
@@ -662,6 +671,14 @@ export default function App() {
                     <div className="full-width">
                       <label>Descripción</label>
                       <textarea value={reportForm.descripcion} onChange={(e) => setReportForm({ ...reportForm, descripcion: e.target.value })} rows={4} placeholder="Describe el problema con detalle..." />
+                    </div>
+                    <div>
+                      <label>Aula / Lugar</label>
+                      <input value={reportForm.aula} onChange={(e) => setReportForm({ ...reportForm, aula: e.target.value })} placeholder="Ej: Lab B-201, Aula 3F" />
+                    </div>
+                    <div>
+                      <label>Edificio</label>
+                      <input value={reportForm.edificio} onChange={(e) => setReportForm({ ...reportForm, edificio: e.target.value })} placeholder="Ej: Bloque B, Bloque C" />
                     </div>
                     <div className="full-width">
                       <button type="button" className="primary-button" onClick={submitReport} disabled={!reportForm.titulo}>Crear ticket</button>
