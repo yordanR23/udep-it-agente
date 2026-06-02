@@ -66,11 +66,11 @@ const TOOLS_META = {
 };
 
 const DEFAULT_TICKETS = [
-  { id: 'TKT-001', titulo: 'Sin acceso a WiFi en Lab B-201', categoria: 'Red', descripcion: 'No hay conectividad en el laboratorio de cómputo', estado: 'abierto', prioridad: 'alta', usuario: 'a.garcia@udep.pe', tecnico: '—', fecha: '2025-05-30', aula: 'Lab B-201', edificio: 'Bloque B', fechaModificacion: '2025-05-30' },
-  { id: 'TKT-002', titulo: 'Proyector dañado en aula 3F', categoria: 'Hardware', descripcion: 'El proyector no emite imagen', estado: 'en_proceso', prioridad: 'media', usuario: 'j.lopez@udep.pe', tecnico: 'M. Torres', fecha: '2025-05-29', aula: 'Aula 3F', edificio: 'Bloque C', fechaModificacion: '2025-05-31' },
-  { id: 'TKT-003', titulo: 'Contraseña de correo institucional bloqueada', categoria: 'Accesos', descripcion: 'No puedo acceder a mi correo', estado: 'resuelto', prioridad: 'media', usuario: 'c.ruiz@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-28', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-29' },
-  { id: 'TKT-004', titulo: 'No carga el aula virtual (Moodle)', categoria: 'Software', descripcion: 'Plataforma Moodle no accesible', estado: 'abierto', prioridad: 'alta', usuario: 'm.flores@udep.pe', tecnico: '—', fecha: '2025-05-31', aula: 'Aula Virtual', edificio: 'En Línea', fechaModificacion: '2025-05-31' },
-  { id: 'TKT-005', titulo: 'Solicitud cuenta VPN para trabajo remoto', categoria: 'Accesos', descripcion: 'Necesito acceso VPN', estado: 'pendiente', prioridad: 'baja', usuario: 'r.santos@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-27', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-27' },
+  { id: 'TKT-001', titulo: 'Sin acceso a WiFi en Lab B-201', categoria: 'Red', descripcion: 'No hay conectividad en el laboratorio de cómputo', estado: 'abierto', prioridad: 'alta', usuario: 'a.garcia@udep.pe', tecnico: '—', fecha: '2025-05-30', aula: 'Lab B-201', edificio: 'Bloque B', fechaModificacion: '2025-05-30', sincronizado: true },
+  { id: 'TKT-002', titulo: 'Proyector dañado en aula 3F', categoria: 'Hardware', descripcion: 'El proyector no emite imagen', estado: 'en_proceso', prioridad: 'media', usuario: 'j.lopez@udep.pe', tecnico: 'M. Torres', fecha: '2025-05-29', aula: 'Aula 3F', edificio: 'Bloque C', fechaModificacion: '2025-05-31', sincronizado: true },
+  { id: 'TKT-003', titulo: 'Contraseña de correo institucional bloqueada', categoria: 'Accesos', descripcion: 'No puedo acceder a mi correo', estado: 'resuelto', prioridad: 'media', usuario: 'c.ruiz@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-28', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-29', sincronizado: true },
+  { id: 'TKT-004', titulo: 'No carga el aula virtual (Moodle)', categoria: 'Software', descripcion: 'Plataforma Moodle no accesible', estado: 'abierto', prioridad: 'alta', usuario: 'm.flores@udep.pe', tecnico: '—', fecha: '2025-05-31', aula: 'Aula Virtual', edificio: 'En Línea', fechaModificacion: '2025-05-31', sincronizado: true },
+  { id: 'TKT-005', titulo: 'Solicitud cuenta VPN para trabajo remoto', categoria: 'Accesos', descripcion: 'Necesito acceso VPN', estado: 'pendiente', prioridad: 'baja', usuario: 'r.santos@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-27', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-27', sincronizado: true },
 ];
 
 const KNOWLEDGE_BASE = [
@@ -141,6 +141,7 @@ export default function App() {
   });
   const [syncStatus, setSyncStatus] = useState('');
   const [syncLoading, setSyncLoading] = useState(false);
+  const [sheetsLoaded, setSheetsLoaded] = useState(false);
   const messagesEnd = useRef(null);
 
   useEffect(() => {
@@ -150,6 +151,31 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('udep_tickets', JSON.stringify(tickets));
   }, [tickets]);
+
+  useEffect(() => {
+    async function loadTicketsFromSheets() {
+      try {
+        const response = await fetch('/api/tickets', { method: 'GET' });
+        const data = await response.json();
+        if (data.tickets && Array.isArray(data.tickets)) {
+          const sheetsTickets = data.tickets.map((t) => ({ ...t, sincronizado: true }));
+          setTickets((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const newFromSheets = sheetsTickets.filter((s) => !existingIds.has(s.id));
+            return [prev[0], ...newFromSheets, ...prev.slice(1)].sort((a, b) => b.id.localeCompare(a.id));
+          });
+        }
+      } catch (error) {
+        console.error('Error cargando tickets de Google Sheets:', error);
+      } finally {
+        setSheetsLoaded(true);
+      }
+    }
+    if (!sheetsLoaded) {
+      loadTicketsFromSheets();
+    }
+  }, [sheetsLoaded]);
+
 
   function startLogin(r) {
     setLoginRole(r);
@@ -412,7 +438,11 @@ export default function App() {
 
   async function syncTicketsToSheet(ticketOrTickets) {
     const payload = Array.isArray(ticketOrTickets) ? ticketOrTickets : [ticketOrTickets];
-    if (!payload.length) return;
+    const unsyncedTickets = payload.filter((t) => !t.sincronizado);
+    if (!unsyncedTickets.length) {
+      setSyncStatus('Todos los tickets ya están sincronizados.');
+      return;
+    }
 
     setSyncLoading(true);
     setSyncStatus('Sincronizando con Google Sheets...');
@@ -421,12 +451,15 @@ export default function App() {
       const response = await fetch('/api/tickets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tickets: payload }),
+        body: JSON.stringify({ tickets: unsyncedTickets }),
       });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Error al sincronizar tickets');
       }
+      setTickets((prev) =>
+        prev.map((t) => (unsyncedTickets.some((u) => u.id === t.id) ? { ...t, sincronizado: true } : t))
+      );
       setSyncStatus('Tickets sincronizados con Google Sheets.');
     } catch (error) {
       setSyncStatus(`Error al sincronizar: ${error.message}`);
@@ -487,9 +520,9 @@ export default function App() {
       aula: reportForm.aula,
       edificio: reportForm.edificio,
       fechaModificacion: today,
+      sincronizado: false,
     };
     setTickets((prev) => [createdTicket, ...prev]);
-    syncTicketsToSheet(createdTicket);
     setReportSent(newId);
     setTimeout(() => {
       setReportSent(false);
@@ -603,8 +636,8 @@ export default function App() {
                   <div className="ticket-actions-row">
                     <button type="button" className="secondary-button" onClick={downloadTicketsCsv}>Exportar CSV</button>
                     <button type="button" className="primary-button" onClick={downloadTicketsXlsx}>Exportar Excel</button>
-                    <button type="button" className="secondary-button" onClick={() => syncTicketsToSheet(tickets)} disabled={syncLoading}>
-                      {syncLoading ? 'Sincronizando...' : 'Sincronizar con Google Sheets'}
+                    <button type="button" className="secondary-button" onClick={() => syncTicketsToSheet(tickets)} disabled={syncLoading || !tickets.some((t) => !t.sincronizado)}>
+                      {syncLoading ? 'Sincronizando...' : `Sincronizar (${tickets.filter((t) => !t.sincronizado).length} pendientes)`}
                     </button>
                   </div>
                   {syncStatus && <div className="sync-status">{syncStatus}</div>}
@@ -612,7 +645,7 @@ export default function App() {
                     <table className="ticket-table">
                     <thead>
                       <tr>
-                        {['ID', 'Título', 'Categoría', 'Estado', 'Aula', 'Edificio', 'Prioridad', 'Técnico', 'Acciones'].map((h) => (
+                        {['ID', 'Título', 'Categoría', 'Estado', 'Aula', 'Edificio', 'Prioridad', 'Técnico', 'Sync', 'Acciones'].map((h) => (
                           <th key={h}>{h}</th>
                         ))}
                       </tr>
@@ -628,6 +661,7 @@ export default function App() {
                           <td>{t.edificio || '—'}</td>
                           <td><PrioridadDot p={t.prioridad} /><span className="priority-label">{t.prioridad}</span></td>
                           <td>{t.tecnico}</td>
+                          <td style={{ textAlign: 'center', fontSize: '16px' }}>{t.sincronizado ? '✓' : '◯'}</td>
                           <td>
                             <button type="button" className="secondary-button small-button" onClick={() => createTicketPng(t)}>
                               Ticket PNG
