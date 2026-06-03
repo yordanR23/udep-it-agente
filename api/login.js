@@ -7,7 +7,6 @@ export default function handler(req, res) {
     role,
     email,
     password,
-    adminKey,
   } = req.body || {};
 
   if (!role || !email || !password) {
@@ -22,11 +21,6 @@ export default function handler(req, res) {
     tecnico: {
       email: process.env.AGENT_TECH_EMAIL,
       password: process.env.AGENT_TECH_PASSWORD,
-    },
-    admin: {
-      email: process.env.AGENT_ADMIN_EMAIL,
-      password: process.env.AGENT_ADMIN_PASSWORD,
-      extraKey: process.env.AGENT_ADMIN_KEY,
     },
     jefe: {
       email: process.env.AGENT_JEFE_EMAIL,
@@ -45,12 +39,6 @@ export default function handler(req, res) {
 
   if (password !== expected.password) {
     return res.status(401).json({ error: 'Contraseña incorrecta.' });
-  }
-
-  if (role === 'admin') {
-    if (!adminKey || adminKey !== expected.extraKey) {
-      return res.status(401).json({ error: 'Clave adicional de administrador incorrecta.' });
-    }
   }
 
   return res.status(200).json({ role, message: 'Autenticación correcta.' });

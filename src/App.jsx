@@ -23,16 +23,6 @@ const ROLES = {
     tools: ['ver_tickets', 'actualizar_ticket', 'diagnostico_red', 'buscar_usuario', 'base_conocimiento', 'buscar_web', 'escalar_ticket'],
     welcome: 'Panel técnico activo. Tienes acceso a la cola de incidencias, herramientas de diagnóstico y búsqueda de usuarios.',
   },
-  admin: {
-    label: 'Administrador de Sistemas',
-    subtitle: 'Infraestructura y servidores',
-    icon: '⚙️',
-    color: '#7c3aed',
-    bg: '#f5f3ff',
-    border: '#ddd6fe',
-    tools: ['ver_tickets', 'actualizar_ticket', 'diagnostico_red', 'gestionar_usuarios', 'reportes', 'base_conocimiento', 'buscar_web', 'escalar_ticket', 'logs_sistema', 'inventario'],
-    welcome: 'Modo administrador. Acceso completo a diagnósticos de red, gestión de usuarios, logs y reportes del sistema.',
-  },
   jefe: {
     label: 'Jefe / Coordinador TI',
     subtitle: 'Gestión y supervisión',
@@ -90,7 +80,6 @@ const STATS = [
 const systemPrompts = {
   usuario: `Eres un asistente de soporte TI de la Universidad de Piura (UDEP). Hablas con un USUARIO FINAL (docente, alumno o administrativo).\nTu tono es amable, claro y sin tecnicismos.\nHerramientas disponibles: reportar incidencias, consultar estado de tickets, base de conocimiento, solicitar accesos.\nCuando el usuario reporte un problema, estructura la información: categoría (Red/Hardware/Software/Accesos), descripción, urgencia.\nSi no puedes resolver algo, indícale que escalarás el ticket a un técnico.\nResponde siempre en español. Sé conciso (máx 3-4 párrafos).`,
   tecnico: `Eres un asistente de soporte TI de la UDEP para un TÉCNICO DE HELPDESK.\nTu tono es técnico pero directo. Ayudas a gestionar la cola de tickets, diagnosticar problemas de red y consultar usuarios.\nHerramientas: ver y actualizar tickets, diagnóstico de red, buscar usuarios en directorio, escalar tickets, base de conocimiento.\nCuando analices un ticket, sugiere pasos concretos de diagnóstico y posibles soluciones.\nResponde siempre en español. Incluye comandos o pasos técnicos cuando sea relevante.`,
-  admin: `Eres un asistente TI de la UDEP para un ADMINISTRADOR DE SISTEMAS.\nTienes acceso completo: tickets, diagnóstico avanzado de red, gestión de usuarios/cuentas, logs del sistema, inventario.\nTu tono es técnico y preciso. Proporciona información detallada de infraestructura cuando se requiera.\nCuando analices logs o diagnostiques red, sé específico con IPs, protocolos, tiempos de respuesta.\nResponde siempre en español. Usa terminología técnica apropiada.`,
   jefe: `Eres un asistente TI de la UDEP para el JEFE/COORDINADOR del área de TI.\nTu tono es ejecutivo y orientado a métricas. Tienes acceso a dashboard, reportes, estadísticas y asignación de técnicos.\nCuando presentes datos, resume los KPIs más importantes. Destaca tendencias y problemas críticos.\nHerramientas: dashboard ejecutivo, reportes de rendimiento, estadísticas, asignación de recursos, inventario.\nResponde siempre en español. Sé conciso y orientado a decisiones.`,
 };
 
@@ -125,7 +114,6 @@ export default function App() {
   const [loginRole, setLoginRole] = useState(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [loginAdminKey, setLoginAdminKey] = useState('');
   const [authError, setAuthError] = useState('');
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -182,7 +170,6 @@ export default function App() {
     setAuthError('');
     setLoginEmail('');
     setLoginPassword('');
-    setLoginAdminKey('');
   }
 
   function selectRole(r) {
@@ -204,7 +191,6 @@ export default function App() {
           role: loginRole,
           email: loginEmail.trim().toLowerCase(),
           password: loginPassword,
-          adminKey: loginAdminKey,
         }),
       });
 
@@ -554,12 +540,6 @@ export default function App() {
             <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="usuario@udep.pe" />
             <label>Contraseña</label>
             <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Contraseña" />
-            {loginRole === 'admin' && (
-              <>
-                <label>Clave adicional de administrador</label>
-                <input type="password" value={loginAdminKey} onChange={(e) => setLoginAdminKey(e.target.value)} placeholder="Clave de administrador" />
-              </>
-            )}
             {authError && <div className="auth-error">{authError}</div>}
             <div className="login-actions">
               <button type="button" className="primary-button" onClick={handleLoginSubmit}>Ingresar</button>
@@ -840,7 +820,7 @@ export default function App() {
               <div className="suggested-prompts">
                 {(role === 'usuario' ? ['Tengo problema con el WiFi', 'No puedo entrar a Moodle', 'Olvidé mi contraseña'] :
                   role === 'tecnico' ? ['Ver tickets pendientes', 'Diagnosticar red del Lab B', 'Buscar usuario garcia@udep'] :
-                  role === 'admin' ? ['Revisar logs del servidor', 'Estado de la infraestructura', 'Gestionar cuenta bloqueada'] :
+                  role === 'jefe' ? ['Resumen de incidencias del mes', 'Rendimiento del equipo TI', 'Tickets críticos sin resolver'] :
                   ['Resumen de incidencias del mes', 'Rendimiento del equipo TI', 'Tickets críticos sin resolver']
                 ).map((s) => (
                   <button key={s} type="button" className="prompt-chip" onClick={() => setInput(s)}>{s}</button>
