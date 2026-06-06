@@ -4,6 +4,9 @@ import { jsPDF } from 'jspdf';
 const STORAGE_KEY = 'udep_helpdesk_tickets_v2';
 const CLEAN_BOOT_KEY = 'udep_helpdesk_clean_boot_v2';
 const ALLOWED_ROLES = ['usuario', 'tecnico', 'jefe'];
+const AUTO_SYNC_MS = 60000;
+const AUTO_TECHNICIAN_EMAIL = 'tecnico@udep.pe';
+const BOSS_NOTIFICATION_LABEL = 'Jefe de Mesa de Ayuda';
 
 const ROLES = {
   usuario: {
@@ -43,10 +46,54 @@ const TOOLS_META = {
 };
 
 const KNOWLEDGE_BASE = [
-  { keywords: ['wifi', 'red', 'internet'], text: 'Prueba olvidar la red, conectarte a UDEP-Seguro, validar usuario institucional y reiniciar el adaptador WiFi.' },
-  { keywords: ['moodle', 'aula virtual'], text: 'Limpia caché del navegador, prueba modo incógnito y confirma que puedes ingresar al correo institucional.' },
-  { keywords: ['contraseña', 'password', 'clave'], text: 'Usa el portal institucional de recuperación. Si no tienes correo alterno, el ticket debe quedar en prioridad media o alta.' },
-  { keywords: ['proyector', 'pantalla', 'hdmi'], text: 'Verifica fuente de entrada, cable HDMI y reinicio del proyector antes de escalar a hardware.' },
+  {
+    keywords: ['wifi', 'wi-fi', 'red', 'internet', 'conexion', 'conexión'],
+    category: 'Red',
+    title: 'Problema de WiFi',
+    steps: [
+      'Verifica que el WiFi esté activo y que estés conectado a la red institucional correcta.',
+      'Desconéctate y vuelve a conectarte; si el equipo lo permite, usa la opción "Olvidar red" y autentícate nuevamente.',
+      'Reinicia el adaptador WiFi o el equipo si otros dispositivos sí tienen conexión.',
+      'Si el problema ocurre en toda el aula, mantén el ticket abierto para revisión de punto de acceso o cobertura.',
+    ],
+    source: 'Basado en guías oficiales de Microsoft Support sobre problemas de conexión WiFi.',
+  },
+  {
+    keywords: ['moodle', 'aula virtual', 'campus virtual'],
+    category: 'Software',
+    title: 'Problema de acceso a Moodle',
+    steps: [
+      'Prueba ingresar desde una ventana privada o de incógnito.',
+      'Limpia caché y cookies del navegador.',
+      'Confirma que tu cuenta institucional funciona en otros servicios.',
+      'Si el error persiste, adjunta el mensaje exacto o una captura al ticket.',
+    ],
+    source: 'Basado en prácticas recomendadas de soporte de plataformas web y documentación de Moodle.',
+  },
+  {
+    keywords: ['contraseña', 'password', 'clave', 'correo', 'gmail', 'cuenta'],
+    category: 'Accesos',
+    title: 'Problema de acceso a cuenta institucional',
+    steps: [
+      'Verifica que estés usando tu correo institucional completo.',
+      'Prueba recuperación de contraseña por el canal institucional autorizado.',
+      'Evita compartir contraseñas o códigos de verificación por chat.',
+      'Si la cuenta está bloqueada o suspendida, el ticket debe revisarse por TI.',
+    ],
+    source: 'Basado en recomendaciones de Google Workspace Admin Help para problemas de inicio de sesión.',
+  },
+  {
+    keywords: ['proyector', 'pantalla', 'hdmi', 'imagen', 'monitor'],
+    category: 'Hardware',
+    title: 'Problema con proyector o pantalla',
+    steps: [
+      'Verifica que el proyector o pantalla esté encendido.',
+      'Revisa que el cable HDMI o adaptador esté bien conectado.',
+      'Cambia la fuente de entrada del proyector si no detecta señal.',
+      'Prueba duplicar pantalla desde el equipo antes de escalar a soporte físico.',
+    ],
+    source: 'Basado en prácticas comunes de diagnóstico de hardware audiovisual.',
+  },
 ];
 
 const TICKET_FIELDS = ['titulo', 'categoria', 'descripcion', 'prioridad', 'aula', 'edificio'];
@@ -71,6 +118,14 @@ function lower(text) {
 
 function makeTicketId(count) {
   return `TKT-${String(count + 1).padStart(3, '0')}`;
+}
+
+function makeNextTicketId(tickets) {
+  const maxId = tickets.reduce((max, ticket) => {
+    const match = String(ticket.id || '').match(/TKT-(\d+)/i);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return makeTicketId(maxId);
 }
 
 function statusLabel(estado) {
@@ -129,6 +184,16 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tickets));
+  }, [tickets]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (tickets.some((ticket) => !ticket.sincronizado)) {
+        syncTicketsToSheet(tickets, { automatic: true });
+      }
+    }, AUTO_SYNC_MS);
+
+    return () => window.clearInterval(interval);
   }, [tickets]);
 
   const roleData = role ? ROLES[role] : null;
@@ -197,67 +262,126 @@ export default function App() {
   function getRecommendation(text) {
     const query = lower(text);
     const match = KNOWLEDGE_BASE.find((item) => item.keywords.some((keyword) => query.includes(keyword)));
-    return match ? `\n\nRecomendación inicial: ${match.text}` : '';
+    if (!match) return '';
+
+    return [
+      'Recomendación inicial que puedes intentar:',
+      ...match.steps.map((step, index) => `${index + 1}. ${step}`),
+      match.source,
+    ].join('\n');
+  }
+
+  function mergeTicketDraft(base, text) {
+    const extracted = extractTicketData(text);
+    return {
+      ...base,
+      ...Object.fromEntries(Object.entries(extracted).filter(([, value]) => normalize(value))),
+      descripcion: normalize(base.descripcion)
+        ? `${base.descripcion}\n${normalize(text)}`.trim()
+        : extracted.descripcion || normalize(text),
+    };
+  }
+
+  function missingTicketFields(data) {
+    return [
+      !data.descripcion && 'descripción del problema',
+      !data.categoria && 'categoría',
+      !data.aula && 'aula o lugar',
+      !data.edificio && 'edificio',
+    ].filter(Boolean);
+  }
+
+  function buildMissingFieldsQuestion(data) {
+    const missing = missingTicketFields(data);
+    if (!missing.length) return '';
+    return `Para registrar el ticket me falta: ${missing.join(', ')}. Puedes responderlo en una sola frase.`;
+  }
+
+  function createTicketFromDraft(data) {
+    const today = new Date().toISOString().slice(0, 10);
+    const priority = data.prioridad || inferPriority(data.descripcion);
+    const autoAssigned = priority === 'alta';
+    const createdTicket = {
+      id: makeNextTicketId(tickets),
+      titulo: data.titulo || buildTicketTitle(data),
+      categoria: data.categoria || inferCategory(data.descripcion),
+      descripcion: summarizeDescription(data.descripcion),
+      estado: autoAssigned ? 'pendiente' : 'abierto',
+      prioridad: priority,
+      tecnicoId: autoAssigned ? AUTO_TECHNICIAN_EMAIL : '',
+      tecnico: autoAssigned ? AUTO_TECHNICIAN_EMAIL : 'Sin asignar',
+      fecha: today,
+      aula: data.aula || 'No especificado',
+      edificio: data.edificio || 'No especificado',
+      fechaModificacion: today,
+      usuarioId: currentUser.id,
+      usuario: currentUser.email,
+      comentarios: [],
+      notificaciones: [
+        {
+          para: BOSS_NOTIFICATION_LABEL,
+          motivo: autoAssigned
+            ? `Ticket de prioridad alta autoasignado a ${AUTO_TECHNICIAN_EMAIL}.`
+            : 'Ticket pendiente de asignación manual por jefatura.',
+          fecha: new Date().toISOString(),
+        },
+      ],
+      sincronizado: false,
+    };
+    addTicket(createdTicket);
+    return createdTicket;
+  }
+
+  function finishTicketReply(ticket) {
+    const recommendation = getRecommendation(`${ticket.categoria} ${ticket.descripcion}`);
+    const notificationText = ticket.prioridad === 'alta'
+      ? `Por prioridad alta, lo asigné automáticamente a ${ticket.tecnico} y notifiqué al jefe.`
+      : 'Notifiqué al jefe para que asigne un técnico.';
+
+    return [
+      `Ticket ${ticket.id} creado.`,
+      `Título: ${ticket.titulo}`,
+      `Categoría: ${ticket.categoria}`,
+      `Prioridad: ${ticket.prioridad}`,
+      `Ubicación: ${ticket.aula} / ${ticket.edificio}`,
+      notificationText,
+      recommendation,
+    ].filter(Boolean).join('\n\n');
   }
 
   function startTicketConversation(seedText) {
-    const initial = { titulo: '', categoria: '', descripcion: seedText || '', prioridad: '', aula: '', edificio: '' };
-    setDraft({ data: initial, step: initial.descripcion ? 'categoria' : 'descripcion' });
-    return initial.descripcion
-      ? `Crearé un ticket vinculado a ${currentUser.email}. Indica la categoría: Red, Hardware, Software, Accesos u Otro.${getRecommendation(seedText)}`
-      : 'Crearé un ticket nuevo por chat. Describe el incidente con el mayor detalle posible.';
+    const data = mergeTicketDraft({ titulo: '', categoria: '', descripcion: '', prioridad: '', aula: '', edificio: '' }, seedText);
+    const missingQuestion = buildMissingFieldsQuestion(data);
+
+    if (missingQuestion) {
+      setDraft({ data });
+      return [
+        'Entendí el incidente y preparé un borrador de ticket.',
+        data.titulo ? `Título sugerido: ${data.titulo}` : '',
+        data.categoria ? `Categoría detectada: ${data.categoria}` : '',
+        data.aula ? `Aula/lugar detectado: ${data.aula}` : '',
+        getRecommendation(seedText),
+        missingQuestion,
+      ].filter(Boolean).join('\n\n');
+    }
+
+    const createdTicket = createTicketFromDraft(data);
+    setDraft(null);
+    return finishTicketReply(createdTicket);
   }
 
   function continueTicketConversation(text) {
     if (!draft) return null;
-    const data = { ...draft.data };
-    const answer = normalize(text);
-
-    if (draft.step === 'descripcion') {
-      data.descripcion = answer;
-      setDraft({ data, step: 'categoria' });
-      return `Descripción registrada. Indica la categoría: ${CATEGORIES.join(', ')}.${getRecommendation(answer)}`;
+    const data = mergeTicketDraft(draft.data, text);
+    const missingQuestion = buildMissingFieldsQuestion(data);
+    if (missingQuestion) {
+      setDraft({ data });
+      return missingQuestion;
     }
 
-    if (draft.step === 'categoria') {
-      const category = CATEGORIES.find((c) => lower(c) === lower(answer)) || CATEGORIES.find((c) => lower(answer).includes(lower(c)));
-      data.categoria = category || 'Otro';
-      setDraft({ data, step: 'prioridad' });
-      return 'Categoría registrada. Indica la prioridad: baja, media o alta.';
-    }
-
-    if (draft.step === 'prioridad') {
-      const priority = ['baja', 'media', 'alta'].find((p) => lower(answer).includes(p)) || 'media';
-      data.prioridad = priority;
-      setDraft({ data, step: 'ubicacion' });
-      return 'Prioridad registrada. Indica aula/lugar y edificio. Ejemplo: Lab B-201, Bloque B.';
-    }
-
-    if (draft.step === 'ubicacion') {
-      const [aula, edificio] = answer.split(',').map((p) => normalize(p));
-      data.aula = aula || 'No especificado';
-      data.edificio = edificio || 'No especificado';
-      data.titulo = data.descripcion.slice(0, 72) || 'Incidente reportado por chat';
-      const today = new Date().toISOString().slice(0, 10);
-      const createdTicket = {
-        id: makeTicketId(tickets.length),
-        ...data,
-        estado: 'abierto',
-        usuarioId: currentUser.id,
-        usuario: currentUser.email,
-        tecnicoId: '',
-        tecnico: 'Sin asignar',
-        comentarios: [],
-        fecha: today,
-        fechaModificacion: today,
-        sincronizado: false,
-      };
-      addTicket(createdTicket);
-      setDraft(null);
-      return `Ticket ${createdTicket.id} creado y vinculado a ${currentUser.email}. Ya aparece en "Mis tickets".`;
-    }
-
-    return null;
+    const createdTicket = createTicketFromDraft(data);
+    setDraft(null);
+    return finishTicketReply(createdTicket);
   }
 
   function handleUsuarioCommand(text) {
@@ -303,10 +427,19 @@ export default function App() {
     if (q.includes('pendientes')) return summarizeTickets(assigned.filter((t) => t.estado !== 'resuelto'), 'Tus tickets pendientes');
     if (q.includes('tickets') || q.includes('asignados')) return summarizeTickets(assigned, 'Tus tickets asignados');
 
+    const startedMatch = text.match(/(?:iniciad[oa]|empec[eé]|comenc[eé]|atenci[oó]n|atendiendo|en atenci[oó]n).*(TKT-\d+)/i);
+    if (startedMatch) {
+      const ticketId = startedMatch[1].toUpperCase();
+      const ticket = assigned.find((t) => t.id === ticketId);
+      if (!ticket) return 'No puedo iniciar la atención de ese ticket porque no está asignado a tu usuario.';
+      updateTicket(ticketId, (t) => ({ ...t, estado: 'en_proceso', fechaModificacion: new Date().toISOString().slice(0, 10), sincronizado: false }));
+      return `Entendido. Actualicé el ticket ${ticketId} a En progreso.`;
+    }
+
     const stateMatch = text.match(/(?:estado|cambiar)\s+(TKT-\d+)\s+(?:a\s+)?([a-z_ ]+)/i);
     if (stateMatch) {
       const ticketId = stateMatch[1].toUpperCase();
-      const estado = lower(stateMatch[2]).replace('en progreso', 'en_proceso').replace('en proceso', 'en_proceso').replace(/\s+/g, '_');
+      const estado = normalizeState(stateMatch[2]);
       const ticket = assigned.find((t) => t.id === ticketId);
       if (!ticket) return 'No puedes cambiar ese ticket porque no está asignado a tu usuario.';
       if (!STATES.includes(estado)) return `Estado no válido. Usa: ${STATES.join(', ')}.`;
@@ -451,8 +584,8 @@ export default function App() {
     doc.save('reporte-mesa-ayuda.pdf');
   }
 
-  async function syncTicketsToSheet(ticketList) {
-    if (role !== 'jefe') {
+  async function syncTicketsToSheet(ticketList, options = {}) {
+    if (!options.automatic && role !== 'jefe') {
       setSyncStatus('Permiso denegado: solo el rol Jefe puede sincronizar con Google Sheets.');
       return;
     }
@@ -461,8 +594,10 @@ export default function App() {
       setSyncStatus('No hay tickets pendientes de sincronizar.');
       return;
     }
-    setSyncLoading(true);
-    setSyncStatus('Sincronizando con Google Sheets...');
+    if (!options.automatic) {
+      setSyncLoading(true);
+      setSyncStatus('Sincronizando con Google Sheets...');
+    }
     try {
       const response = await fetch('/api/tickets', {
         method: 'POST',
@@ -472,11 +607,11 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Error al sincronizar tickets');
       setTickets((prev) => prev.map((ticket) => (unsyncedTickets.some((u) => u.id === ticket.id) ? { ...ticket, sincronizado: true } : ticket)));
-      setSyncStatus('Tickets sincronizados con Google Sheets.');
+      if (!options.automatic) setSyncStatus('Tickets sincronizados con Google Sheets.');
     } catch (error) {
-      setSyncStatus(`Error al sincronizar: ${error.message}`);
+      if (!options.automatic) setSyncStatus(`Error al sincronizar: ${error.message}`);
     } finally {
-      setSyncLoading(false);
+      if (!options.automatic) setSyncLoading(false);
     }
   }
 
@@ -638,6 +773,93 @@ function getVisibleTickets(tickets, role, currentUser) {
   if (role === 'tecnico') return tickets.filter((ticket) => ticket.tecnicoId === currentUser.id);
   if (role === 'jefe') return tickets;
   return [];
+}
+
+function extractTicketData(text) {
+  const raw = normalize(text);
+  const q = lower(raw);
+  const category = inferCategory(raw);
+  const aula = inferAula(raw);
+  const edificio = inferEdificio(raw);
+  const priority = inferPriority(raw);
+  const title = buildTicketTitle({ categoria: category, descripcion: raw, aula });
+
+  return {
+    titulo: title,
+    categoria: category,
+    descripcion: raw,
+    prioridad: priority,
+    aula,
+    edificio,
+    estado: q.includes('resuelto') ? 'resuelto' : '',
+  };
+}
+
+function inferCategory(text) {
+  const q = lower(text);
+  const match = KNOWLEDGE_BASE.find((item) => item.keywords.some((keyword) => q.includes(keyword)));
+  if (match) return match.category;
+  if (['laptop', 'pc', 'equipo', 'impresora', 'teclado', 'mouse'].some((word) => q.includes(word))) return 'Hardware';
+  if (['software', 'programa', 'aplicacion', 'aplicación', 'sistema'].some((word) => q.includes(word))) return 'Software';
+  if (['usuario', 'permiso', 'acceso', 'cuenta'].some((word) => q.includes(word))) return 'Accesos';
+  return 'Otro';
+}
+
+function inferAula(text) {
+  const q = normalize(text);
+  const aulaMatch = q.match(/\b(?:aula|salon|salón|laboratorio|lab|oficina)\s+([a-z0-9-]+)/i);
+  if (aulaMatch) return `${capitalize(aulaMatch[0].replace(/\s+/g, ' '))}`;
+  const simpleRoomMatch = q.match(/\b([A-Z]?\d{2,3}[A-Z]?|[A-Z]-\d{2,3})\b/);
+  return simpleRoomMatch ? `Aula ${simpleRoomMatch[1]}` : '';
+}
+
+function inferEdificio(text) {
+  const q = normalize(text);
+  const explicit = q.match(/\b(?:edificio|bloque|pabellon|pabellón)\s+([a-z0-9-]+)/i);
+  if (explicit) return capitalize(explicit[0].replace(/\s+/g, ' '));
+  const block = q.match(/\b(?:bloque)\s*([a-z])\b/i);
+  return block ? `Bloque ${block[1].toUpperCase()}` : '';
+}
+
+function inferPriority(text) {
+  const q = lower(text);
+  if (['urgente', 'critico', 'crítico', 'no hay internet', 'toda el aula', 'toda la clase', 'clase en curso', 'examen', 'laboratorio completo'].some((word) => q.includes(word))) return 'alta';
+  if (['no puedo', 'bloqueado', 'no funciona', 'falla', 'intermitente'].some((word) => q.includes(word))) return 'media';
+  return 'baja';
+}
+
+function normalizeState(text) {
+  const q = lower(text);
+  if (['en progreso', 'en proceso', 'en atencion', 'en atención', 'atendiendo', 'iniciado'].some((state) => q.includes(state))) return 'en_proceso';
+  if (q.includes('resuelto') || q.includes('cerrado') || q.includes('solucionado')) return 'resuelto';
+  if (q.includes('pendiente')) return 'pendiente';
+  if (q.includes('abierto')) return 'abierto';
+  return q.replace(/\s+/g, '_');
+}
+
+function buildTicketTitle(data) {
+  const category = data.categoria || inferCategory(data.descripcion);
+  const location = data.aula ? ` en ${data.aula}` : '';
+  const q = lower(data.descripcion);
+  if (category === 'Red') return `Problema de WiFi o conectividad${location}`;
+  if (category === 'Accesos') return `Problema de acceso a cuenta o servicio${location}`;
+  if (category === 'Hardware') {
+    if (q.includes('proyector')) return `Problema con proyector${location}`;
+    return `Problema de hardware${location}`;
+  }
+  if (category === 'Software') return `Problema de software o plataforma${location}`;
+  return `Incidente de soporte TI${location}`;
+}
+
+function summarizeDescription(text) {
+  const value = normalize(text);
+  if (!value) return 'El usuario reportó un incidente de soporte TI sin mayor detalle.';
+  return value.length > 220 ? `${value.slice(0, 217)}...` : value;
+}
+
+function capitalize(text) {
+  const value = normalize(text);
+  return value ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : '';
 }
 
 function buildDashboard(tickets) {
