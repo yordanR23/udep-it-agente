@@ -1,107 +1,96 @@
-import { useState, useRef, useEffect } from 'react';
-import { utils, writeFile } from 'xlsx';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { jsPDF } from 'jspdf';
+
+const STORAGE_KEY = 'udep_helpdesk_tickets_v2';
+const CLEAN_BOOT_KEY = 'udep_helpdesk_clean_boot_v2';
+const ALLOWED_ROLES = ['usuario', 'tecnico', 'jefe'];
 
 const ROLES = {
   usuario: {
     label: 'Usuario Final',
     subtitle: 'Docente / Alumno / Administrativo',
     icon: '👤',
-    color: '#2563eb',
-    bg: '#eff6ff',
-    border: '#bfdbfe',
-    tools: ['reportar_incidencia', 'consultar_estado', 'base_conocimiento', 'solicitar_acceso', 'buscar_web'],
-    welcome: 'Hola, soy tu asistente de soporte TI de la UDEP. Puedo ayudarte a reportar incidencias, consultar el estado de tus tickets o resolver dudas técnicas.',
+    tools: ['mis_tickets', 'base_conocimiento'],
+    welcome: 'Hola. Soy el motor lógico de Mesa de Ayuda. Puedo crear tickets por chat, mostrar tus tickets, modificar un campo de tus tickets, eliminarlos y darte recomendaciones de soporte.',
   },
   tecnico: {
-    label: 'Técnico de Soporte',
-    subtitle: 'Helpdesk / Soporte en campo',
+    label: 'Técnico',
+    subtitle: 'Soporte asignado',
     icon: '🔧',
-    color: '#059669',
-    bg: '#ecfdf5',
-    border: '#a7f3d0',
-    tools: ['ver_tickets', 'actualizar_ticket', 'diagnostico_red', 'buscar_usuario', 'base_conocimiento', 'buscar_web', 'escalar_ticket'],
-    welcome: 'Panel técnico activo. Tienes acceso a la cola de incidencias, herramientas de diagnóstico y búsqueda de usuarios.',
+    tools: ['tickets_asignados', 'pendientes'],
+    welcome: 'Panel técnico activo. Solo puedes ver tickets asignados a tu usuario, agregar comentarios y cambiar su estado.',
   },
   jefe: {
-    label: 'Jefe / Coordinador TI',
-    subtitle: 'Gestión y supervisión',
+    label: 'Jefe',
+    subtitle: 'Gestión de Mesa de Ayuda',
     icon: '📊',
-    color: '#b45309',
-    bg: '#fffbeb',
-    border: '#fde68a',
-    tools: ['dashboard', 'reportes', 'ver_tickets', 'gestionar_usuarios', 'inventario', 'buscar_web', 'estadisticas', 'asignar_tecnico'],
-    welcome: 'Panel de coordinación. Acceso a dashboard ejecutivo, reportes de rendimiento, estadísticas y asignación de recursos.',
+    tools: ['todos_tickets', 'dashboard', 'reportes', 'graficos', 'asignar_tecnico', 'sincronizar_sheets'],
+    welcome: 'Panel de jefatura activo. Puedes consultar todos los tickets, ver indicadores, generar reportes PDF/PNG, asignar técnicos y sincronizar con Google Sheets.',
   },
 };
 
 const TOOLS_META = {
-  reportar_incidencia: { icon: '🚨', label: 'Reportar incidencia', desc: 'Crear nuevo ticket' },
-  consultar_estado: { icon: '🔍', label: 'Consultar estado', desc: 'Ver mis tickets' },
-  base_conocimiento: { icon: '📚', label: 'Base de conocimiento', desc: 'Guías y soluciones' },
-  solicitar_acceso: { icon: '🔑', label: 'Solicitar acceso', desc: 'Credenciales y permisos' },
-  buscar_web: { icon: '🌐', label: 'Búsqueda web', desc: 'Documentación externa' },
-  ver_tickets: { icon: '📋', label: 'Cola de tickets', desc: 'Todas las incidencias' },
-  actualizar_ticket: { icon: '✏️', label: 'Actualizar ticket', desc: 'Modificar estado' },
-  diagnostico_red: { icon: '📡', label: 'Diagnóstico de red', desc: 'Análisis conectividad' },
-  buscar_usuario: { icon: '👥', label: 'Buscar usuario', desc: 'Directorio UDEP' },
-  escalar_ticket: { icon: '⬆️', label: 'Escalar ticket', desc: 'Subir prioridad' },
-  gestionar_usuarios: { icon: '🛡️', label: 'Gestionar usuarios', desc: 'Cuentas y accesos' },
-  reportes: { icon: '📈', label: 'Reportes', desc: 'Informes del área' },
-  logs_sistema: { icon: '🖥️', label: 'Logs del sistema', desc: 'Eventos y errores' },
-  inventario: { icon: '🗃️', label: 'Inventario', desc: 'Equipos y activos' },
-  dashboard: { icon: '📊', label: 'Dashboard', desc: 'Vista ejecutiva' },
-  estadisticas: { icon: '📉', label: 'Estadísticas', desc: 'KPIs del área' },
-  asignar_tecnico: { icon: '👨‍💼', label: 'Asignar técnico', desc: 'Distribuir carga' },
+  mis_tickets: { icon: '📋', label: 'Mis tickets', desc: 'Tickets reportados' },
+  tickets_asignados: { icon: '🧰', label: 'Asignados', desc: 'Solo mis tickets' },
+  pendientes: { icon: '⏱️', label: 'Pendientes', desc: 'Abiertos o en proceso' },
+  todos_tickets: { icon: '📚', label: 'Todos los tickets', desc: 'Vista global' },
+  dashboard: { icon: '📊', label: 'Dashboard', desc: 'Indicadores clave' },
+  reportes: { icon: '📄', label: 'Reportes PDF', desc: 'Reporte general' },
+  graficos: { icon: '🥧', label: 'Gráficos', desc: 'Temporal y circular' },
+  asignar_tecnico: { icon: '👥', label: 'Asignar técnico', desc: 'Asignación manual' },
+  sincronizar_sheets: { icon: '🔄', label: 'Google Sheets', desc: 'Sincronizar datos' },
+  base_conocimiento: { icon: '💡', label: 'Recomendaciones', desc: 'Ayuda rápida' },
 };
-
-const DEFAULT_TICKETS = [
-  { id: 'TKT-001', titulo: 'Sin acceso a WiFi en Lab B-201', categoria: 'Red', descripcion: 'No hay conectividad en el laboratorio de cómputo', estado: 'abierto', prioridad: 'alta', usuario: 'a.garcia@udep.pe', tecnico: '—', fecha: '2025-05-30', aula: 'Lab B-201', edificio: 'Bloque B', fechaModificacion: '2025-05-30', sincronizado: true },
-  { id: 'TKT-002', titulo: 'Proyector dañado en aula 3F', categoria: 'Hardware', descripcion: 'El proyector no emite imagen', estado: 'en_proceso', prioridad: 'media', usuario: 'j.lopez@udep.pe', tecnico: 'M. Torres', fecha: '2025-05-29', aula: 'Aula 3F', edificio: 'Bloque C', fechaModificacion: '2025-05-31', sincronizado: true },
-  { id: 'TKT-003', titulo: 'Contraseña de correo institucional bloqueada', categoria: 'Accesos', descripcion: 'No puedo acceder a mi correo', estado: 'resuelto', prioridad: 'media', usuario: 'c.ruiz@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-28', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-29', sincronizado: true },
-  { id: 'TKT-004', titulo: 'No carga el aula virtual (Moodle)', categoria: 'Software', descripcion: 'Plataforma Moodle no accesible', estado: 'abierto', prioridad: 'alta', usuario: 'm.flores@udep.pe', tecnico: '—', fecha: '2025-05-31', aula: 'Aula Virtual', edificio: 'En Línea', fechaModificacion: '2025-05-31', sincronizado: true },
-  { id: 'TKT-005', titulo: 'Solicitud cuenta VPN para trabajo remoto', categoria: 'Accesos', descripcion: 'Necesito acceso VPN', estado: 'pendiente', prioridad: 'baja', usuario: 'r.santos@udep.pe', tecnico: 'L. Soto', fecha: '2025-05-27', aula: 'Oficina', edificio: 'Administración', fechaModificacion: '2025-05-27', sincronizado: true },
-];
 
 const KNOWLEDGE_BASE = [
-  { titulo: 'Cómo conectarse al WiFi institucional UDEP', cat: 'Red', pasos: '1. Selecciona \'UDEP-Seguro\'\n2. Ingresa tu código de estudiante/empleado\n3. Contraseña: igual que tu correo institucional\n4. Acepta el certificado de seguridad' },
-  { titulo: 'Resetear contraseña del correo institucional', cat: 'Accesos', pasos: '1. Visita portal.udep.pe/reset\n2. Ingresa tu DNI\n3. Recibirás un enlace a tu correo alternativo\n4. Si no tienes acceso, acércate a TI con tu DNI' },
-  { titulo: 'Acceso a Moodle (Aula Virtual)', cat: 'Software', pasos: '1. Ingresa a aulavirtual.udep.pe\n2. Usuario: código institucional\n3. Contraseña: misma que el correo\n4. Si falla, limpiar caché del navegador (Ctrl+Shift+Del)' },
-  { titulo: 'Solicitar instalación de software', cat: 'Software', pasos: '1. Reportar incidencia con categoría \'Software\'\n2. Especificar nombre del programa y justificación\n3. Requiere aprobación de jefe de área\n4. Tiempo estimado: 2-3 días hábiles' },
+  { keywords: ['wifi', 'red', 'internet'], text: 'Prueba olvidar la red, conectarte a UDEP-Seguro, validar usuario institucional y reiniciar el adaptador WiFi.' },
+  { keywords: ['moodle', 'aula virtual'], text: 'Limpia caché del navegador, prueba modo incógnito y confirma que puedes ingresar al correo institucional.' },
+  { keywords: ['contraseña', 'password', 'clave'], text: 'Usa el portal institucional de recuperación. Si no tienes correo alterno, el ticket debe quedar en prioridad media o alta.' },
+  { keywords: ['proyector', 'pantalla', 'hdmi'], text: 'Verifica fuente de entrada, cable HDMI y reinicio del proyector antes de escalar a hardware.' },
 ];
 
-const STATS = [
-  { label: 'Tickets abiertos', value: '12', trend: '+3 hoy', color: '#ef4444' },
-  { label: 'En proceso', value: '8', trend: '=', color: '#f59e0b' },
-  { label: 'Resueltos hoy', value: '5', trend: '+5', color: '#10b981' },
-  { label: 'Tiempo prom.', value: '2.4h', trend: '-0.3h', color: '#6366f1' },
-];
-
-const systemPrompts = {
-  usuario: `Eres un asistente de soporte TI de la Universidad de Piura (UDEP). Hablas con un USUARIO FINAL (docente, alumno o administrativo).\nTu tono es amable, claro y sin tecnicismos.\nHerramientas disponibles: reportar incidencias, consultar estado de tickets, base de conocimiento, solicitar accesos.\nCuando el usuario reporte un problema, estructura la información: categoría (Red/Hardware/Software/Accesos), descripción, urgencia.\nSi no puedes resolver algo, indícale que escalarás el ticket a un técnico.\nResponde siempre en español. Sé conciso (máx 3-4 párrafos).`,
-  tecnico: `Eres un asistente de soporte TI de la UDEP para un TÉCNICO DE HELPDESK.\nTu tono es técnico pero directo. Ayudas a gestionar la cola de tickets, diagnosticar problemas de red y consultar usuarios.\nHerramientas: ver y actualizar tickets, diagnóstico de red, buscar usuarios en directorio, escalar tickets, base de conocimiento.\nCuando analices un ticket, sugiere pasos concretos de diagnóstico y posibles soluciones.\nResponde siempre en español. Incluye comandos o pasos técnicos cuando sea relevante.`,
-  jefe: `Eres un asistente TI de la UDEP para el JEFE/COORDINADOR del área de TI.\nTu tono es ejecutivo y orientado a métricas. Tienes acceso a dashboard, reportes, estadísticas y asignación de técnicos.\nCuando presentes datos, resume los KPIs más importantes. Destaca tendencias y problemas críticos.\nHerramientas: dashboard ejecutivo, reportes de rendimiento, estadísticas, asignación de recursos, inventario.\nResponde siempre en español. Sé conciso y orientado a decisiones.`,
-};
+const TICKET_FIELDS = ['titulo', 'categoria', 'descripcion', 'prioridad', 'aula', 'edificio'];
+const STATES = ['abierto', 'en_proceso', 'resuelto', 'pendiente'];
+const CATEGORIES = ['Red', 'Hardware', 'Software', 'Accesos', 'Otro'];
 
 function TypingDots() {
   return (
     <span className="typing-dots">
-      {[0, 1, 2].map((i) => (
-        <span key={i} />
-      ))}
+      {[0, 1, 2].map((i) => <span key={i} />)}
     </span>
   );
 }
 
+function normalize(text) {
+  return String(text || '').trim();
+}
+
+function lower(text) {
+  return normalize(text).toLowerCase();
+}
+
+function makeTicketId(count) {
+  return `TKT-${String(count + 1).padStart(3, '0')}`;
+}
+
+function statusLabel(estado) {
+  return {
+    abierto: 'Abierto',
+    en_proceso: 'En progreso',
+    resuelto: 'Resuelto',
+    pendiente: 'Pendiente',
+  }[estado] || estado || 'Sin estado';
+}
+
 function TicketBadge({ estado }) {
   const map = {
-    abierto: { bg: '#fef2f2', color: '#dc2626', label: 'Abierto' },
-    en_proceso: { bg: '#fffbeb', color: '#d97706', label: 'En proceso' },
-    resuelto: { bg: '#f0fdf4', color: '#16a34a', label: 'Resuelto' },
-    pendiente: { bg: '#f0f9ff', color: '#0284c7', label: 'Pendiente' },
+    abierto: { bg: '#fef2f2', color: '#dc2626' },
+    en_proceso: { bg: '#fffbeb', color: '#d97706' },
+    resuelto: { bg: '#f0fdf4', color: '#16a34a' },
+    pendiente: { bg: '#eff6ff', color: '#2563eb' },
   };
   const s = map[estado] || map.abierto;
-  return <span className="ticket-badge" style={{ background: s.bg, color: s.color }}>{s.label}</span>;
+  return <span className="ticket-badge" style={{ background: s.bg, color: s.color }}>{statusLabel(estado)}</span>;
 }
 
 function PrioridadDot({ p }) {
@@ -111,6 +100,7 @@ function PrioridadDot({ p }) {
 
 export default function App() {
   const [role, setRole] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
   const [loginRole, setLoginRole] = useState(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -119,67 +109,51 @@ export default function App() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [panel, setPanel] = useState(null);
-  const [reportForm, setReportForm] = useState({ titulo: '', categoria: 'Red', descripcion: '', urgencia: 'media', aula: '', edificio: '' });
-  const [reportSent, setReportSent] = useState(false);
-  const [kbSearch, setKbSearch] = useState('');
-  const [kbOpen, setKbOpen] = useState(null);
   const [tickets, setTickets] = useState(() => {
-    const saved = localStorage.getItem('udep_tickets');
-    return saved ? JSON.parse(saved) : DEFAULT_TICKETS;
+    if (localStorage.getItem(CLEAN_BOOT_KEY) !== 'done') {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.setItem(CLEAN_BOOT_KEY, 'done');
+      return [];
+    }
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [];
   });
+  const [draft, setDraft] = useState(null);
   const [syncStatus, setSyncStatus] = useState('');
   const [syncLoading, setSyncLoading] = useState(false);
-  const [sheetsLoaded, setSheetsLoaded] = useState(false);
   const messagesEnd = useRef(null);
 
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, loading]);
 
   useEffect(() => {
-    localStorage.setItem('udep_tickets', JSON.stringify(tickets));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tickets));
   }, [tickets]);
 
-  useEffect(() => {
-    async function loadTicketsFromSheets() {
-      try {
-        const response = await fetch('/api/tickets', { method: 'GET' });
-        const data = await response.json();
-        if (data.tickets && Array.isArray(data.tickets)) {
-          const sheetsTickets = data.tickets.map((t) => ({ ...t, sincronizado: true }));
-          setTickets((prev) => {
-            const existingIds = new Set(prev.map((p) => p.id));
-            const newFromSheets = sheetsTickets.filter((s) => !existingIds.has(s.id));
-            return [prev[0], ...newFromSheets, ...prev.slice(1)].sort((a, b) => b.id.localeCompare(a.id));
-          });
-        }
-      } catch (error) {
-        console.error('Error cargando tickets de Google Sheets:', error);
-      } finally {
-        setSheetsLoaded(true);
-      }
-    }
-    if (!sheetsLoaded) {
-      loadTicketsFromSheets();
-    }
-  }, [sheetsLoaded]);
-
+  const roleData = role ? ROLES[role] : null;
+  const visibleTickets = useMemo(() => getVisibleTickets(tickets, role, currentUser), [tickets, role, currentUser]);
+  const dashboard = useMemo(() => buildDashboard(tickets), [tickets]);
 
   function startLogin(r) {
+    if (!ALLOWED_ROLES.includes(r)) return;
     setLoginRole(r);
     setAuthError('');
     setLoginEmail('');
     setLoginPassword('');
   }
 
-  function selectRole(r) {
+  function selectRole(r, email) {
+    const user = { id: email, email, role: r };
     setRole(r);
+    setCurrentUser(user);
     setMessages([{ role: 'assistant', text: ROLES[r].welcome }]);
     setPanel(null);
+    setDraft(null);
   }
 
   async function handleLoginSubmit() {
-    if (!loginRole) return;
+    if (!loginRole || !ALLOWED_ROLES.includes(loginRole)) return;
     setLoading(true);
     setAuthError('');
 
@@ -193,13 +167,9 @@ export default function App() {
           password: loginPassword,
         }),
       });
-
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Error de autenticación');
-      }
-
-      selectRole(loginRole);
+      if (!response.ok) throw new Error(data.error || 'Error de autenticación');
+      selectRole(data.role, data.email);
       setLoginRole(null);
     } catch (error) {
       setAuthError(error.message);
@@ -208,231 +178,291 @@ export default function App() {
     }
   }
 
-  function buildCsvText(ticketsToExport) {
-    const header = ['ID', 'Título', 'Categoría', 'Estado', 'Prioridad', 'Usuario', 'Técnico', 'Fecha', 'Descripción'];
-    const rows = ticketsToExport.map((ticket) => [
-      ticket.id,
-      ticket.titulo,
-      ticket.categoria,
-      ticket.estado,
-      ticket.prioridad,
-      ticket.usuario,
-      ticket.tecnico,
-      ticket.fecha,
-      ticket.descripcion,
-    ]);
-    const csv = [header, ...rows]
-      .map((row) => row.map((cell) => `"${String(cell || '').replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    return csv;
+  function appendAssistant(text) {
+    setMessages((prev) => [...prev, { role: 'assistant', text }]);
   }
 
-  function downloadTicketsCsv() {
-    const csvContent = buildCsvText(tickets);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  function addTicket(ticket) {
+    setTickets((prev) => [ticket, ...prev]);
+  }
+
+  function updateTicket(ticketId, updater) {
+    setTickets((prev) => prev.map((ticket) => (ticket.id === ticketId ? updater(ticket) : ticket)));
+  }
+
+  function deleteTicket(ticketId) {
+    setTickets((prev) => prev.filter((ticket) => ticket.id !== ticketId));
+  }
+
+  function getRecommendation(text) {
+    const query = lower(text);
+    const match = KNOWLEDGE_BASE.find((item) => item.keywords.some((keyword) => query.includes(keyword)));
+    return match ? `\n\nRecomendación inicial: ${match.text}` : '';
+  }
+
+  function startTicketConversation(seedText) {
+    const initial = { titulo: '', categoria: '', descripcion: seedText || '', prioridad: '', aula: '', edificio: '' };
+    setDraft({ data: initial, step: initial.descripcion ? 'categoria' : 'descripcion' });
+    return initial.descripcion
+      ? `Crearé un ticket vinculado a ${currentUser.email}. Indica la categoría: Red, Hardware, Software, Accesos u Otro.${getRecommendation(seedText)}`
+      : 'Crearé un ticket nuevo por chat. Describe el incidente con el mayor detalle posible.';
+  }
+
+  function continueTicketConversation(text) {
+    if (!draft) return null;
+    const data = { ...draft.data };
+    const answer = normalize(text);
+
+    if (draft.step === 'descripcion') {
+      data.descripcion = answer;
+      setDraft({ data, step: 'categoria' });
+      return `Descripción registrada. Indica la categoría: ${CATEGORIES.join(', ')}.${getRecommendation(answer)}`;
+    }
+
+    if (draft.step === 'categoria') {
+      const category = CATEGORIES.find((c) => lower(c) === lower(answer)) || CATEGORIES.find((c) => lower(answer).includes(lower(c)));
+      data.categoria = category || 'Otro';
+      setDraft({ data, step: 'prioridad' });
+      return 'Categoría registrada. Indica la prioridad: baja, media o alta.';
+    }
+
+    if (draft.step === 'prioridad') {
+      const priority = ['baja', 'media', 'alta'].find((p) => lower(answer).includes(p)) || 'media';
+      data.prioridad = priority;
+      setDraft({ data, step: 'ubicacion' });
+      return 'Prioridad registrada. Indica aula/lugar y edificio. Ejemplo: Lab B-201, Bloque B.';
+    }
+
+    if (draft.step === 'ubicacion') {
+      const [aula, edificio] = answer.split(',').map((p) => normalize(p));
+      data.aula = aula || 'No especificado';
+      data.edificio = edificio || 'No especificado';
+      data.titulo = data.descripcion.slice(0, 72) || 'Incidente reportado por chat';
+      const today = new Date().toISOString().slice(0, 10);
+      const createdTicket = {
+        id: makeTicketId(tickets.length),
+        ...data,
+        estado: 'abierto',
+        usuarioId: currentUser.id,
+        usuario: currentUser.email,
+        tecnicoId: '',
+        tecnico: 'Sin asignar',
+        comentarios: [],
+        fecha: today,
+        fechaModificacion: today,
+        sincronizado: false,
+      };
+      addTicket(createdTicket);
+      setDraft(null);
+      return `Ticket ${createdTicket.id} creado y vinculado a ${currentUser.email}. Ya aparece en "Mis tickets".`;
+    }
+
+    return null;
+  }
+
+  function handleUsuarioCommand(text) {
+    const q = lower(text);
+    const ownTickets = getVisibleTickets(tickets, 'usuario', currentUser);
+
+    if (isTicketCreationIntent(q)) return startTicketConversation(text);
+
+    if (q.includes('mis tickets') || q.includes('ver tickets') || q.includes('estado')) {
+      return summarizeTickets(ownTickets, 'Tus tickets');
+    }
+
+    const deleteMatch = q.match(/eliminar\s+(tkt-\d+)/i);
+    if (deleteMatch) {
+      const ticketId = deleteMatch[1].toUpperCase();
+      const ticket = ownTickets.find((t) => t.id === ticketId);
+      if (!ticket) return 'No puedo eliminar ese ticket porque no pertenece a tu usuario o no existe.';
+      deleteTicket(ticketId);
+      return `Ticket ${ticketId} eliminado.`;
+    }
+
+    const modifyMatch = text.match(/(?:modificar|cambiar|actualizar)\s+(TKT-\d+)\s+([a-záéíóúñ_ ]+?)\s+(?:a|por|=)\s+(.+)/i);
+    if (modifyMatch) {
+      const [, rawId, rawField, rawValue] = modifyMatch;
+      const ticketId = rawId.toUpperCase();
+      const field = normalize(rawField).toLowerCase().replace('urgencia', 'prioridad');
+      const ticket = ownTickets.find((t) => t.id === ticketId);
+      if (!ticket) return 'No puedo modificar ese ticket porque no pertenece a tu usuario o no existe.';
+      if (!TICKET_FIELDS.includes(field)) return `Solo puedes modificar estos campos: ${TICKET_FIELDS.join(', ')}.`;
+      updateTicket(ticketId, (t) => ({ ...t, [field]: normalize(rawValue), fechaModificacion: new Date().toISOString().slice(0, 10), sincronizado: false }));
+      return `Ticket ${ticketId} actualizado: ${field} = ${normalize(rawValue)}.`;
+    }
+
+    if (q.includes('recomend')) return getRecommendation(q).replace('\n\n', '') || 'Describe el problema técnico para darte una recomendación inicial.';
+    if (isOutOfScope(q)) return outOfScopeMessage();
+    return 'Puedo ayudarte con tareas de mesa de ayuda: crear tickets, ver tus tickets, modificar un campo, eliminar un ticket propio o dar recomendaciones técnicas.';
+  }
+
+  function handleTecnicoCommand(text) {
+    const q = lower(text);
+    const assigned = getVisibleTickets(tickets, 'tecnico', currentUser);
+
+    if (q.includes('pendientes')) return summarizeTickets(assigned.filter((t) => t.estado !== 'resuelto'), 'Tus tickets pendientes');
+    if (q.includes('tickets') || q.includes('asignados')) return summarizeTickets(assigned, 'Tus tickets asignados');
+
+    const stateMatch = text.match(/(?:estado|cambiar)\s+(TKT-\d+)\s+(?:a\s+)?([a-z_ ]+)/i);
+    if (stateMatch) {
+      const ticketId = stateMatch[1].toUpperCase();
+      const estado = lower(stateMatch[2]).replace('en progreso', 'en_proceso').replace('en proceso', 'en_proceso').replace(/\s+/g, '_');
+      const ticket = assigned.find((t) => t.id === ticketId);
+      if (!ticket) return 'No puedes cambiar ese ticket porque no está asignado a tu usuario.';
+      if (!STATES.includes(estado)) return `Estado no válido. Usa: ${STATES.join(', ')}.`;
+      updateTicket(ticketId, (t) => ({ ...t, estado, fechaModificacion: new Date().toISOString().slice(0, 10), sincronizado: false }));
+      return `Ticket ${ticketId} actualizado a ${statusLabel(estado)}.`;
+    }
+
+    const commentMatch = text.match(/(?:comentar|comentario)\s+(TKT-\d+)\s+(.+)/i);
+    if (commentMatch) {
+      const ticketId = commentMatch[1].toUpperCase();
+      const ticket = assigned.find((t) => t.id === ticketId);
+      if (!ticket) return 'No puedes comentar ese ticket porque no está asignado a tu usuario.';
+      updateTicket(ticketId, (t) => ({
+        ...t,
+        comentarios: [...(t.comentarios || []), { autor: currentUser.email, texto: normalize(commentMatch[2]), fecha: new Date().toISOString() }],
+        fechaModificacion: new Date().toISOString().slice(0, 10),
+        sincronizado: false,
+      }));
+      return `Comentario agregado al ticket ${ticketId}.`;
+    }
+
+    if (isOutOfScope(q)) return outOfScopeMessage();
+    return 'Como técnico solo puedo mostrar tus tickets asignados, listar pendientes, agregar comentarios o cambiar estados.';
+  }
+
+  function handleJefeCommand(text) {
+    const q = lower(text);
+
+    if (q.includes('dashboard') || q.includes('indicadores')) return dashboardText(dashboard);
+    if (q.includes('todos') || q.includes('tickets')) return summarizeTickets(tickets, 'Todos los tickets del sistema');
+    if (q.includes('pdf') || q.includes('reporte')) {
+      downloadReportPdf();
+      return 'Reporte general PDF generado.';
+    }
+    if (q.includes('png') || q.includes('imagen') || q.includes('grafico') || q.includes('gráfico')) {
+      downloadChartsPng();
+      return 'Resumen gráfico PNG generado con serie temporal y gráfico circular.';
+    }
+    if (q.includes('sincron')) {
+      syncTicketsToSheet(tickets);
+      return 'Sincronización con Google Sheets iniciada.';
+    }
+
+    const assignMatch = text.match(/asignar\s+(TKT-\d+)\s+(?:a\s+)?([^\s]+@[^\s]+)/i);
+    if (assignMatch) {
+      const ticketId = assignMatch[1].toUpperCase();
+      const tecnicoEmail = assignMatch[2].toLowerCase();
+      const ticket = tickets.find((t) => t.id === ticketId);
+      if (!ticket) return `No existe el ticket ${ticketId}.`;
+      updateTicket(ticketId, (t) => ({ ...t, tecnicoId: tecnicoEmail, tecnico: tecnicoEmail, estado: t.estado === 'abierto' ? 'pendiente' : t.estado, fechaModificacion: new Date().toISOString().slice(0, 10), sincronizado: false }));
+      return `Ticket ${ticketId} asignado a ${tecnicoEmail}.`;
+    }
+
+    if (isOutOfScope(q)) return outOfScopeMessage();
+    return 'Como jefe puedo ver todos los tickets, dashboard, reportes PDF, gráficos PNG, asignar técnicos y sincronizar con Google Sheets.';
+  }
+
+  async function sendMessage() {
+    if (!input.trim() || loading || !role || !currentUser) return;
+    const text = input.trim();
+    setMessages((prev) => [...prev, { role: 'user', text }]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      let reply = draft ? continueTicketConversation(text) : null;
+      if (!reply) {
+        if (role === 'usuario') reply = handleUsuarioCommand(text);
+        if (role === 'tecnico') reply = handleTecnicoCommand(text);
+        if (role === 'jefe') reply = handleJefeCommand(text);
+      }
+      appendAssistant(reply || outOfScopeMessage());
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function buildCsvText(ticketsToExport) {
+    const header = ['ID', 'Titulo', 'Categoria', 'Estado', 'Prioridad', 'Usuario', 'Tecnico', 'Fecha', 'Descripcion'];
+    const rows = ticketsToExport.map((ticket) => [ticket.id, ticket.titulo, ticket.categoria, ticket.estado, ticket.prioridad, ticket.usuario, ticket.tecnico, ticket.fecha, ticket.descripcion]);
+    return [header, ...rows].map((row) => row.map((cell) => `"${String(cell || '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  }
+
+  function downloadTicketsCsv(ticketsToExport = visibleTickets) {
+    const blob = new Blob([buildCsvText(ticketsToExport)], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'udep-tickets.csv';
+    link.download = 'tickets-helpdesk.csv';
     link.click();
     URL.revokeObjectURL(url);
   }
 
-  function downloadTicketsXlsx() {
-    const data = tickets.map((ticket) => ({
-      ID: ticket.id,
-      Título: ticket.titulo,
-      Categoría: ticket.categoria,
-      Estado: ticket.estado,
-      Prioridad: ticket.prioridad,
-      Usuario: ticket.usuario,
-      Técnico: ticket.tecnico,
-      Fecha: ticket.fecha,
-      Descripción: ticket.descripcion,
-    }));
-    const worksheet = utils.json_to_sheet(data);
-    const workbook = utils.book_new();
-    utils.book_append_sheet(workbook, worksheet, 'Tickets');
-    writeFile(workbook, 'udep-tickets.xlsx');
-  }
-
   function createTicketPng(ticket) {
-    const width = 900;
-    const height = 520;
     const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = 900;
+    canvas.height = 520;
     const ctx = canvas.getContext('2d');
-
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#1f2937';
-    ctx.fillRect(0, 0, width, 90);
-
+    ctx.fillRect(0, 0, 900, 520);
+    ctx.fillStyle = '#172554';
+    ctx.fillRect(0, 0, 900, 86);
     ctx.fillStyle = '#ffffff';
     ctx.font = '28px sans-serif';
-    ctx.fillText(`Ticket ${ticket.id}`, 30, 52);
-    ctx.font = '18px sans-serif';
-    ctx.fillText(ticket.titulo || 'Sin título', 30, 90);
-
-    const fields = [
-      ['Categoría', ticket.categoria],
-      ['Estado', ticket.estado],
-      ['Prioridad', ticket.prioridad],
-      ['Usuario', ticket.usuario],
-      ['Técnico', ticket.tecnico],
-      ['Aula', ticket.aula],
-      ['Edificio', ticket.edificio],
-      ['Fecha', ticket.fecha],
-      ['Mod.', ticket.fechaModificacion],
-      ['Descripción', ticket.descripcion],
-    ];
-
-    let y = 140;
-    ctx.fillStyle = '#111827';
-    ctx.font = '16px sans-serif';
-    fields.forEach(([label, value]) => {
-      ctx.fillText(`${label}:`, 30, y);
-      ctx.fillStyle = '#374151';
-      const text = String(value || '—');
-      const maxWidth = 820;
-      const words = text.split(' ');
-      let line = '';
-      for (let n = 0; n < words.length; n += 1) {
-        const testLine = line + words[n] + ' ';
-        const metrics = ctx.measureText(testLine);
-        if (metrics.width > maxWidth && n > 0) {
-          ctx.fillText(line.trim(), 150, y);
-          line = `${words[n]} `;
-          y += 24;
-        } else {
-          line = testLine;
-        }
-      }
-      ctx.fillText(line.trim(), 150, y);
-      y += 32;
-      ctx.fillStyle = '#111827';
-    });
-
-    const link = document.createElement('a');
-    link.href = canvas.toDataURL('image/png');
-    link.download = `ticket-${ticket.id}.png`;
-    link.click();
+    ctx.fillText(`Ticket ${ticket.id}`, 32, 44);
+    ctx.font = '15px sans-serif';
+    ctx.fillText(ticket.titulo || 'Incidente', 32, 70);
+    drawWrappedFields(ctx, ticket);
+    downloadCanvas(canvas, `ticket-${ticket.id}.png`);
   }
 
-  function createChartCanvas() {
-    const categories = tickets.reduce((acc, ticket) => {
-      const key = ticket.estado || 'Sin estado';
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-
-    const labels = Object.keys(categories);
-    const values = labels.map((label) => categories[label]);
-    const width = 900;
-    const height = 520;
+  function downloadChartsPng() {
     const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = 1000;
+    canvas.height = 640;
     const ctx = canvas.getContext('2d');
-
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#111827';
-    ctx.font = '24px sans-serif';
-    ctx.fillText('Tickets por estado', 30, 50);
-
-    const maxVal = Math.max(...values, 1);
-    const chartTop = 90;
-    const chartHeight = 340;
-    const chartLeft = 120;
-    const chartWidth = 740;
-    const barWidth = Math.min(80, chartWidth / labels.length - 25);
-
-    labels.forEach((label, index) => {
-      const x = chartLeft + index * (barWidth + 35);
-      const barHeight = (values[index] / maxVal) * (chartHeight - 40);
-      ctx.fillStyle = '#2563eb';
-      ctx.fillRect(x, chartTop + chartHeight - barHeight, barWidth, barHeight);
-      ctx.fillStyle = '#111827';
-      ctx.font = '14px sans-serif';
-      ctx.fillText(values[index], x + 10, chartTop + chartHeight - barHeight - 10);
-      ctx.fillText(label, x, chartTop + chartHeight + 24);
-    });
-
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(chartLeft, chartTop);
-    ctx.lineTo(chartLeft, chartTop + chartHeight);
-    ctx.lineTo(chartLeft + chartWidth, chartTop + chartHeight);
-    ctx.stroke();
-
-    return canvas;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#0f172a';
+    ctx.font = '26px sans-serif';
+    ctx.fillText('Mesa de Ayuda - Graficos', 32, 46);
+    drawTimeSeries(ctx, tickets, 40, 95, 560, 220);
+    drawPie(ctx, tickets, 760, 205, 115);
+    downloadCanvas(canvas, 'resumen-tickets.png');
   }
 
-  function downloadChartPng() {
-    const canvas = createChartCanvas();
-    const link = document.createElement('a');
-    link.href = canvas.toDataURL('image/png');
-    link.download = 'grafico-tickets.png';
-    link.click();
-  }
-
-  async function downloadReportPdf() {
+  function downloadReportPdf() {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
     doc.setFontSize(18);
-    doc.text('Reporte de tickets', 40, 50);
+    doc.text('Reporte general de Mesa de Ayuda', 40, 50);
     doc.setFontSize(11);
-    doc.text(`Fecha: ${new Date().toLocaleString()}`, 40, 70);
-
-    const statusCounts = tickets.reduce((acc, ticket) => {
-      const key = ticket.estado || 'Sin estado';
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-
-    let y = 100;
-    doc.setFontSize(12);
-    Object.entries(statusCounts).forEach(([status, count]) => {
-      doc.text(`${status}: ${count}`, 40, y);
+    doc.text(`Generado: ${new Date().toLocaleString()}`, 40, 70);
+    doc.text(`Total: ${tickets.length}`, 40, 100);
+    doc.text(`Abiertos: ${dashboard.abiertos}`, 40, 118);
+    doc.text(`En progreso/pendientes: ${dashboard.enTrabajo}`, 40, 136);
+    doc.text(`Resueltos: ${dashboard.resueltos}`, 40, 154);
+    let y = 190;
+    tickets.slice(0, 18).forEach((ticket) => {
+      doc.text(`${ticket.id} | ${statusLabel(ticket.estado)} | ${ticket.prioridad} | ${ticket.titulo}`, 40, y);
       y += 18;
     });
-
-    const canvas = createChartCanvas();
-    const imgData = canvas.toDataURL('image/png');
-    doc.addImage(imgData, 'PNG', 40, y + 20, 520, 260);
-    doc.setFontSize(12);
-    doc.text('Tickets recientes:', 40, y + 300);
-
-    let rowY = y + 320;
-    const columns = ['ID', 'Título', 'Estado', 'Prioridad'];
-    columns.forEach((col, index) => {
-      doc.text(col, 40 + index * 140, rowY);
-    });
-    rowY += 18;
-    tickets.slice(0, 6).forEach((ticket) => {
-      const row = [ticket.id, ticket.titulo, ticket.estado, ticket.prioridad];
-      row.forEach((value, index) => {
-        doc.text(String(value || ''), 40 + index * 140, rowY);
-      });
-      rowY += 18;
-    });
-
-    doc.save('reporte-tickets.pdf');
+    doc.save('reporte-mesa-ayuda.pdf');
   }
 
-  async function syncTicketsToSheet(ticketOrTickets) {
-    const payload = Array.isArray(ticketOrTickets) ? ticketOrTickets : [ticketOrTickets];
-    const unsyncedTickets = payload.filter((t) => !t.sincronizado);
-    if (!unsyncedTickets.length) {
-      setSyncStatus('Todos los tickets ya están sincronizados.');
+  async function syncTicketsToSheet(ticketList) {
+    if (role !== 'jefe') {
+      setSyncStatus('Permiso denegado: solo el rol Jefe puede sincronizar con Google Sheets.');
       return;
     }
-
+    const unsyncedTickets = ticketList.filter((t) => !t.sincronizado);
+    if (!unsyncedTickets.length) {
+      setSyncStatus('No hay tickets pendientes de sincronizar.');
+      return;
+    }
     setSyncLoading(true);
     setSyncStatus('Sincronizando con Google Sheets...');
-
     try {
       const response = await fetch('/api/tickets', {
         method: 'POST',
@@ -440,85 +470,15 @@ export default function App() {
         body: JSON.stringify({ tickets: unsyncedTickets }),
       });
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Error al sincronizar tickets');
-      }
-      setTickets((prev) =>
-        prev.map((t) => (unsyncedTickets.some((u) => u.id === t.id) ? { ...t, sincronizado: true } : t))
-      );
+      if (!response.ok) throw new Error(data.error || 'Error al sincronizar tickets');
+      setTickets((prev) => prev.map((ticket) => (unsyncedTickets.some((u) => u.id === ticket.id) ? { ...ticket, sincronizado: true } : ticket)));
       setSyncStatus('Tickets sincronizados con Google Sheets.');
     } catch (error) {
       setSyncStatus(`Error al sincronizar: ${error.message}`);
-      console.error(error);
     } finally {
       setSyncLoading(false);
     }
   }
-
-  async function callAgent(messages) {
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Error en la API');
-    }
-    return data.content;
-  }
-
-  async function sendMessage() {
-    if (!input.trim() || loading || !role) return;
-    const userMsg = { role: 'user', text: input.trim() };
-    const newMsgs = [...messages, userMsg];
-    setMessages(newMsgs);
-    setInput('');
-    setLoading(true);
-
-    try {
-      const apiMessages = [
-        { role: 'system', text: systemPrompts[role] },
-        ...newMsgs,
-      ];
-      const reply = await callAgent(apiMessages);
-      setMessages((prev) => [...prev, { role: 'assistant', text: reply }]);
-    } catch (error) {
-      setMessages((prev) => [...prev, { role: 'assistant', text: `Error: ${error.message}` }]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function submitReport() {
-    const newId = `TKT-${String(tickets.length + 1).padStart(3, '0')}`;
-    const today = new Date().toISOString().slice(0, 10);
-    const createdTicket = {
-      id: newId,
-      titulo: reportForm.titulo,
-      categoria: reportForm.categoria,
-      descripcion: reportForm.descripcion,
-      estado: 'abierto',
-      prioridad: reportForm.urgencia,
-      usuario: 'cliente.udep@udep.pe',
-      tecnico: '—',
-      fecha: today,
-      aula: reportForm.aula,
-      edificio: reportForm.edificio,
-      fechaModificacion: today,
-      sincronizado: false,
-    };
-    setTickets((prev) => [createdTicket, ...prev]);
-    setReportSent(newId);
-    setTimeout(() => {
-      setReportSent(false);
-      setReportForm({ titulo: '', categoria: 'Red', descripcion: '', urgencia: 'media', aula: '', edificio: '' });
-      setPanel(null);
-    }, 3000);
-  }
-
-  const roleData = role ? ROLES[role] : null;
-  const filteredKB = KNOWLEDGE_BASE.filter((k) => k.titulo.toLowerCase().includes(kbSearch.toLowerCase()) || k.cat.toLowerCase().includes(kbSearch.toLowerCase()));
 
   if (!role) {
     return (
@@ -528,8 +488,8 @@ export default function App() {
             <div className="role-badge">🎓</div>
             <span className="role-title">Universidad de Piura</span>
           </div>
-          <h1>Agente de Soporte TI</h1>
-          <p>Selecciona tu rol e inicia sesión con tu correo institucional.</p>
+          <h1>Mesa de Ayuda Conversacional</h1>
+          <p>Solo existen los roles Usuario Final, Técnico y Jefe.</p>
         </div>
 
         {loginRole ? (
@@ -542,10 +502,8 @@ export default function App() {
             <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Contraseña" />
             {authError && <div className="auth-error">{authError}</div>}
             <div className="login-actions">
-              <button type="button" className="primary-button" onClick={handleLoginSubmit}>Ingresar</button>
-              <button type="button" className="secondary-button" onClick={() => { setLoginRole(null); setAuthError(''); }}>
-                Cancelar
-              </button>
+              <button type="button" className="primary-button" onClick={handleLoginSubmit} disabled={loading}>Ingresar</button>
+              <button type="button" className="secondary-button" onClick={() => { setLoginRole(null); setAuthError(''); }}>Cancelar</button>
             </div>
           </div>
         ) : (
@@ -556,10 +514,7 @@ export default function App() {
                 <div className="role-card-label">{r.label}</div>
                 <div className="role-card-subtitle">{r.subtitle}</div>
                 <div className="role-card-tools">
-                  {r.tools.slice(0, 3).map((t) => (
-                    <span key={t} className="tool-chip">{TOOLS_META[t]?.label}</span>
-                  ))}
-                  {r.tools.length > 3 && <span className="tool-chip more">+{r.tools.length - 3} más</span>}
+                  {r.tools.slice(0, 3).map((tool) => <span key={tool} className="tool-chip">{TOOLS_META[tool]?.label}</span>)}
                 </div>
               </button>
             ))}
@@ -575,24 +530,24 @@ export default function App() {
         <div className="app-header-title">
           <div className="brand-icon">🎓</div>
           <div>
-            <div className="brand-name">UDEP · Soporte TI</div>
-            <div className="brand-subtitle">Campus Piura</div>
+            <div className="brand-name">UDEP · Mesa de Ayuda</div>
+            <div className="brand-subtitle">{currentUser?.email}</div>
           </div>
         </div>
         <div className="role-pill">
           <span className="role-pill-badge">{roleData.icon} {roleData.label}</span>
-          <button className="text-button" type="button" onClick={() => setRole(null)}>Cambiar rol</button>
+          <button className="text-button" type="button" onClick={() => { setRole(null); setCurrentUser(null); setPanel(null); }}>Cambiar rol</button>
         </div>
       </header>
 
       <div className="app-body">
         <aside className="sidebar">
           <p className="sidebar-title">Herramientas</p>
-          {roleData.tools.map((t) => {
-            const meta = TOOLS_META[t];
-            const active = panel === t;
+          {roleData.tools.map((tool) => {
+            const meta = TOOLS_META[tool];
+            const active = panel === tool;
             return (
-              <button key={t} type="button" className={`tool-button ${active ? 'active' : ''}`} onClick={() => setPanel(active ? null : t)}>
+              <button key={tool} type="button" className={`tool-button ${active ? 'active' : ''}`} onClick={() => setPanel(active ? null : tool)}>
                 <span className="tool-icon">{meta?.icon}</span>
                 <div>
                   <div className="tool-label">{meta?.label}</div>
@@ -611,200 +566,37 @@ export default function App() {
                 <button className="text-button" type="button" onClick={() => setPanel(null)}>✕</button>
               </div>
 
-              {(panel === 'ver_tickets' || panel === 'consultar_estado') && (
-                <>
-                  <div className="ticket-actions-row">
-                    <button type="button" className="secondary-button" onClick={downloadTicketsCsv}>Exportar CSV</button>
-                    <button type="button" className="primary-button" onClick={downloadTicketsXlsx}>Exportar Excel</button>
-                    <button type="button" className="secondary-button" onClick={() => syncTicketsToSheet(tickets)} disabled={syncLoading || !tickets.some((t) => !t.sincronizado)}>
-                      {syncLoading ? 'Sincronizando...' : `Sincronizar (${tickets.filter((t) => !t.sincronizado).length} pendientes)`}
-                    </button>
-                  </div>
-                  {syncStatus && <div className="sync-status">{syncStatus}</div>}
-                  <div className="ticket-table-wrapper">
-                    <table className="ticket-table">
-                    <thead>
-                      <tr>
-                        {['ID', 'Título', 'Categoría', 'Estado', 'Aula', 'Edificio', 'Prioridad', 'Técnico', 'Sync', 'Acciones'].map((h) => (
-                          <th key={h}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tickets.map((t) => (
-                        <tr key={t.id}>
-                          <td className="mono-cell">{t.id}</td>
-                          <td>{t.titulo}</td>
-                          <td>{t.categoria}</td>
-                          <td><TicketBadge estado={t.estado} /></td>
-                          <td>{t.aula || '—'}</td>
-                          <td>{t.edificio || '—'}</td>
-                          <td><PrioridadDot p={t.prioridad} /><span className="priority-label">{t.prioridad}</span></td>
-                          <td>{t.tecnico}</td>
-                          <td style={{ textAlign: 'center', fontSize: '16px' }}>{t.sincronizado ? '✓' : '◯'}</td>
-                          <td>
-                            <button type="button" className="secondary-button small-button" onClick={() => createTicketPng(t)}>
-                              Ticket PNG
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
+              {['mis_tickets', 'tickets_asignados', 'pendientes', 'todos_tickets'].includes(panel) && (
+                <TicketTable
+                  tickets={panel === 'pendientes' ? visibleTickets.filter((t) => t.estado !== 'resuelto') : visibleTickets}
+                  role={role}
+                  onPng={createTicketPng}
+                  onCsv={downloadTicketsCsv}
+                />
               )}
 
-              {panel === 'reportar_incidencia' && (
-                reportSent ? (
-                  <div className="success-panel">
-                    <div className="success-icon">✅</div>
-                    <div className="success-title">Ticket {reportSent} creado exitosamente</div>
-                    <div className="success-text">Un técnico se comunicará contigo pronto.</div>
-                  </div>
-                ) : (
-                  <div className="report-form-grid">
-                    <div className="full-width">
-                      <label>Título del problema *</label>
-                      <input value={reportForm.titulo} onChange={(e) => setReportForm({ ...reportForm, titulo: e.target.value })} placeholder="Ej: Sin acceso a WiFi en Lab B-201" />
-                    </div>
-                    <div>
-                      <label>Categoría</label>
-                      <select value={reportForm.categoria} onChange={(e) => setReportForm({ ...reportForm, categoria: e.target.value })}>
-                        {['Red', 'Hardware', 'Software', 'Accesos', 'Otro'].map((c) => (<option key={c}>{c}</option>))}
-                      </select>
-                    </div>
-                    <div>
-                      <label>Urgencia</label>
-                      <select value={reportForm.urgencia} onChange={(e) => setReportForm({ ...reportForm, urgencia: e.target.value })}>
-                        <option value="baja">Baja</option>
-                        <option value="media">Media</option>
-                        <option value="alta">Alta</option>
-                      </select>
-                    </div>
-                    <div className="full-width">
-                      <label>Descripción</label>
-                      <textarea value={reportForm.descripcion} onChange={(e) => setReportForm({ ...reportForm, descripcion: e.target.value })} rows={4} placeholder="Describe el problema con detalle..." />
-                    </div>
-                    <div>
-                      <label>Aula / Lugar</label>
-                      <input value={reportForm.aula} onChange={(e) => setReportForm({ ...reportForm, aula: e.target.value })} placeholder="Ej: Lab B-201, Aula 3F" />
-                    </div>
-                    <div>
-                      <label>Edificio</label>
-                      <input value={reportForm.edificio} onChange={(e) => setReportForm({ ...reportForm, edificio: e.target.value })} placeholder="Ej: Bloque B, Bloque C" />
-                    </div>
-                    <div className="full-width">
-                      <button type="button" className="primary-button" onClick={submitReport} disabled={!reportForm.titulo}>Crear ticket</button>
-                    </div>
-                  </div>
-                )
+              {panel === 'dashboard' && <Dashboard dashboard={dashboard} />}
+              {panel === 'reportes' && <PanelAction text="Genera un reporte general en PDF con todos los tickets." button="Descargar PDF" onClick={downloadReportPdf} disabled={!tickets.length} />}
+              {panel === 'graficos' && <PanelAction text="Exporta un resumen PNG con serie temporal y gráfico circular." button="Descargar PNG" onClick={downloadChartsPng} disabled={!tickets.length} />}
+              {panel === 'asignar_tecnico' && <HelpText text="Usa el chat: asignar TKT-001 a tecnico@udep.pe" />}
+              {panel === 'sincronizar_sheets' && (
+                <PanelAction
+                  text={syncStatus || 'Sincroniza todos los tickets no sincronizados con Google Sheets.'}
+                  button={syncLoading ? 'Sincronizando...' : 'Sincronizar'}
+                  onClick={() => syncTicketsToSheet(tickets)}
+                  disabled={syncLoading || !tickets.some((ticket) => !ticket.sincronizado)}
+                />
               )}
-
-              {panel === 'reportes' && (
-                <div className="report-card">
-                  <div className="report-card-header">
-                    <div>
-                      <h3>Reportes</h3>
-                      <p>Genera documentos y gráficos de tus tickets.</p>
-                    </div>
-                  </div>
-                  <div className="report-actions-row">
-                    <button type="button" className="primary-button" onClick={downloadReportPdf} disabled={!tickets.length}>
-                      Descargar reporte PDF
-                    </button>
-                    <button type="button" className="secondary-button" onClick={downloadChartPng} disabled={!tickets.length}>
-                      Descargar gráfico PNG
-                    </button>
-                  </div>
-                  <div className="report-summary">
-                    <div>Total de tickets: {tickets.length}</div>
-                    <div>Pendientes: {tickets.filter((t) => t.estado === 'Pendiente').length}</div>
-                    <div>En proceso: {tickets.filter((t) => t.estado === 'En proceso').length}</div>
-                    <div>Resueltos: {tickets.filter((t) => t.estado === 'Resuelto').length}</div>
-                  </div>
-                </div>
-              )}
-
-              {panel === 'base_conocimiento' && (
-                <div>
-                  <input value={kbSearch} onChange={(e) => setKbSearch(e.target.value)} placeholder="Buscar en guías..." className="kb-search" />
-                  {filteredKB.map((k, i) => (
-                    <div key={i} className="kb-card">
-                      <button className="kb-card-header" type="button" onClick={() => setKbOpen(kbOpen === i ? null : i)}>
-                        <span>{k.titulo}</span>
-                        <span className="kb-tag">{k.cat}</span>
-                      </button>
-                      {kbOpen === i && <div className="kb-body">{k.pasos}</div>}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {(panel === 'dashboard' || panel === 'estadisticas') && (
-                <div>
-                  <div className="stats-grid">
-                    {STATS.map((s) => (
-                      <div key={s.label} className="stats-card" style={{ borderColor: s.color }}>
-                        <div className="stats-label">{s.label}</div>
-                        <div className="stats-value" style={{ color: s.color }}>{s.value}</div>
-                        <div className="stats-trend">{s.trend}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="distribution-card">
-                    <div className="distribution-title">Distribución por categoría</div>
-                    {[
-                      { cat: 'Red / Conectividad', pct: 38, color: '#6366f1' },
-                      { cat: 'Software / Apps', pct: 32, color: '#0ea5e9' },
-                      { cat: 'Accesos / Cuentas', pct: 22, color: '#10b981' },
-                      { cat: 'Hardware', pct: 8, color: '#f59e0b' },
-                    ].map((b) => (
-                      <div key={b.cat} className="distribution-row">
-                        <div className="distribution-row-label"><span>{b.cat}</span><span>{b.pct}%</span></div>
-                        <div className="progress-bar"><div className="progress-fill" style={{ width: `${b.pct}%`, background: b.color }} /></div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {panel === 'diagnostico_red' && (
-                <div className="network-grid">
-                  {[
-                    { label: 'Gateway principal', val: '10.0.0.1', ok: true },
-                    { label: 'DNS Primario', val: '8.8.8.8', ok: true },
-                    { label: 'Servidor Moodle', val: '192.168.1.10', ok: true },
-                    { label: 'WiFi UDEP-Seguro', val: '2.4GHz / 5GHz', ok: true },
-                    { label: 'VPN Server', val: 'vpn.udep.pe', ok: false },
-                    { label: 'Correo SMTP', val: 'mail.udep.pe', ok: true },
-                  ].map((r) => (
-                    <div key={r.label} className="network-card">
-                      <div className="network-card-title">{r.label}</div>
-                      <div className="network-card-value">{r.val}</div>
-                      <div className="network-card-status">{r.ok ? '🟢' : '🔴'}</div>
-                    </div>
-                  ))}
-                  <div className="network-alert">⚠️ VPN Server con latencia elevada (420ms). Revisar configuración de túnel.</div>
-                </div>
-              )}
-
-              {!['ver_tickets', 'consultar_estado', 'reportar_incidencia', 'base_conocimiento', 'dashboard', 'estadisticas', 'diagnostico_red'].includes(panel) && (
-                <div className="placeholder-panel">
-                  <div className="placeholder-icon">{TOOLS_META[panel]?.icon}</div>
-                  <div className="placeholder-title">Módulo <strong>{TOOLS_META[panel]?.label}</strong> disponible.</div>
-                  <div className="placeholder-text">Pregúntale al agente o describe lo que necesitas hacer.</div>
-                </div>
-              )}
+              {panel === 'base_conocimiento' && <KnowledgeBase />}
             </section>
           )}
 
           <section className="chat-section">
             <div className="chat-body">
-              {messages.map((m, i) => (
-                <div key={i} className={`chat-row ${m.role === 'user' ? 'chat-user' : 'chat-assistant'}`}>
-                  {m.role === 'assistant' && <div className="chat-avatar">🤖</div>}
-                  <div className={`chat-bubble ${m.role === 'user' ? 'user-bubble' : 'assistant-bubble'}`}>{m.text}</div>
+              {messages.map((message, index) => (
+                <div key={index} className={`chat-row ${message.role === 'user' ? 'chat-user' : 'chat-assistant'}`}>
+                  {message.role === 'assistant' && <div className="chat-avatar">🤖</div>}
+                  <div className={`chat-bubble ${message.role === 'user' ? 'user-bubble' : 'assistant-bubble'}`}>{message.text}</div>
                 </div>
               ))}
               {loading && (
@@ -818,23 +610,250 @@ export default function App() {
 
             {messages.length <= 1 && (
               <div className="suggested-prompts">
-                {(role === 'usuario' ? ['Tengo problema con el WiFi', 'No puedo entrar a Moodle', 'Olvidé mi contraseña'] :
-                  role === 'tecnico' ? ['Ver tickets pendientes', 'Diagnosticar red del Lab B', 'Buscar usuario garcia@udep'] :
-                  role === 'jefe' ? ['Resumen de incidencias del mes', 'Rendimiento del equipo TI', 'Tickets críticos sin resolver'] :
-                  ['Resumen de incidencias del mes', 'Rendimiento del equipo TI', 'Tickets críticos sin resolver']
-                ).map((s) => (
-                  <button key={s} type="button" className="prompt-chip" onClick={() => setInput(s)}>{s}</button>
+                {(role === 'usuario'
+                  ? ['Reportar incidencia', 'Mis tickets', 'Recomendación para WiFi']
+                  : role === 'tecnico'
+                    ? ['Tickets asignados', 'Pendientes', 'estado TKT-001 a en_proceso']
+                    : ['Dashboard', 'Todos los tickets', 'asignar TKT-001 a tecnico@udep.pe']
+                ).map((prompt) => (
+                  <button key={prompt} type="button" className="prompt-chip" onClick={() => setInput(prompt)}>{prompt}</button>
                 ))}
               </div>
             )}
 
             <div className="chat-input-row">
-              <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()} placeholder={`Escribe tu consulta... (${roleData.label})`} />
+              <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()} placeholder={`Escribe una tarea de mesa de ayuda... (${roleData.label})`} />
               <button type="button" className="primary-button" onClick={sendMessage} disabled={!input.trim() || loading}>Enviar</button>
             </div>
           </section>
         </main>
       </div>
+    </div>
+  );
+}
+
+function getVisibleTickets(tickets, role, currentUser) {
+  if (!currentUser || !ALLOWED_ROLES.includes(role)) return [];
+  if (role === 'usuario') return tickets.filter((ticket) => ticket.usuarioId === currentUser.id);
+  if (role === 'tecnico') return tickets.filter((ticket) => ticket.tecnicoId === currentUser.id);
+  if (role === 'jefe') return tickets;
+  return [];
+}
+
+function buildDashboard(tickets) {
+  const abiertos = tickets.filter((ticket) => ticket.estado === 'abierto').length;
+  const enTrabajo = tickets.filter((ticket) => ['en_proceso', 'pendiente'].includes(ticket.estado)).length;
+  const resueltos = tickets.filter((ticket) => ticket.estado === 'resuelto').length;
+  const sinAsignar = tickets.filter((ticket) => !ticket.tecnicoId).length;
+  return { total: tickets.length, abiertos, enTrabajo, resueltos, sinAsignar };
+}
+
+function dashboardText(dashboard) {
+  return `Dashboard de Mesa de Ayuda:
+Total: ${dashboard.total}
+Abiertos: ${dashboard.abiertos}
+En trabajo: ${dashboard.enTrabajo}
+Resueltos: ${dashboard.resueltos}
+Sin asignar: ${dashboard.sinAsignar}`;
+}
+
+function summarizeTickets(ticketList, title) {
+  if (!ticketList.length) return `${title}: no hay tickets para mostrar.`;
+  return `${title}:\n${ticketList.map((ticket) => `${ticket.id} | ${statusLabel(ticket.estado)} | ${ticket.prioridad} | ${ticket.titulo} | Técnico: ${ticket.tecnico}`).join('\n')}`;
+}
+
+function isTicketCreationIntent(q) {
+  return ['reportar', 'crear ticket', 'nuevo ticket', 'incidencia', 'problema', 'falla', 'no puedo', 'no funciona'].some((word) => q.includes(word));
+}
+
+function isOutOfScope(q) {
+  return ['chiste', 'poema', 'receta', 'pelicula', 'historia', 'cancion', 'canción'].some((word) => q.includes(word));
+}
+
+function outOfScopeMessage() {
+  return 'No es mi función atender esa solicitud. Solo puedo responder tareas de Mesa de Ayuda: tickets, estados, asignaciones, reportes, dashboard, exportaciones y recomendaciones técnicas.';
+}
+
+function drawWrappedFields(ctx, ticket) {
+  const fields = [
+    ['Categoria', ticket.categoria],
+    ['Estado', statusLabel(ticket.estado)],
+    ['Prioridad', ticket.prioridad],
+    ['Usuario', ticket.usuario],
+    ['Tecnico', ticket.tecnico],
+    ['Ubicacion', `${ticket.aula || 'No especificado'} / ${ticket.edificio || 'No especificado'}`],
+    ['Fecha', ticket.fecha],
+    ['Descripcion', ticket.descripcion],
+  ];
+  let y = 126;
+  ctx.font = '16px sans-serif';
+  fields.forEach(([label, value]) => {
+    ctx.fillStyle = '#0f172a';
+    ctx.fillText(`${label}:`, 32, y);
+    ctx.fillStyle = '#475569';
+    const text = String(value || 'Sin dato');
+    const words = text.split(' ');
+    let line = '';
+    words.forEach((word) => {
+      const next = `${line}${word} `;
+      if (ctx.measureText(next).width > 690) {
+        ctx.fillText(line.trim(), 160, y);
+        line = `${word} `;
+        y += 24;
+      } else {
+        line = next;
+      }
+    });
+    ctx.fillText(line.trim(), 160, y);
+    y += 34;
+  });
+}
+
+function drawTimeSeries(ctx, tickets, x, y, width, height) {
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '17px sans-serif';
+  ctx.fillText('Serie temporal por fecha', x, y - 24);
+  const counts = tickets.reduce((acc, ticket) => {
+    const key = ticket.fecha || 'Sin fecha';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const labels = Object.keys(counts).sort();
+  const values = labels.map((label) => counts[label]);
+  const max = Math.max(...values, 1);
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x, y + height);
+  ctx.lineTo(x + width, y + height);
+  ctx.stroke();
+  ctx.strokeStyle = '#2563eb';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  values.forEach((value, index) => {
+    const px = x + (labels.length <= 1 ? width / 2 : (index / (labels.length - 1)) * width);
+    const py = y + height - (value / max) * (height - 24);
+    if (index === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  });
+  ctx.stroke();
+  ctx.fillStyle = '#475569';
+  ctx.font = '12px sans-serif';
+  labels.slice(0, 6).forEach((label, index) => ctx.fillText(label, x + index * 90, y + height + 22));
+}
+
+function drawPie(ctx, tickets, cx, cy, radius) {
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '17px sans-serif';
+  ctx.fillText('Tickets por estado', cx - 80, cy - radius - 36);
+  const colors = ['#dc2626', '#d97706', '#16a34a', '#2563eb'];
+  const counts = STATES.map((state) => tickets.filter((ticket) => ticket.estado === state).length);
+  const total = Math.max(counts.reduce((sum, count) => sum + count, 0), 1);
+  let start = -Math.PI / 2;
+  counts.forEach((count, index) => {
+    const angle = (count / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, radius, start, start + angle);
+    ctx.closePath();
+    ctx.fillStyle = colors[index];
+    ctx.fill();
+    start += angle;
+  });
+  ctx.font = '12px sans-serif';
+  STATES.forEach((state, index) => {
+    ctx.fillStyle = colors[index];
+    ctx.fillRect(cx - 90, cy + radius + 28 + index * 20, 12, 12);
+    ctx.fillStyle = '#475569';
+    ctx.fillText(`${statusLabel(state)}: ${counts[index]}`, cx - 70, cy + radius + 39 + index * 20);
+  });
+}
+
+function downloadCanvas(canvas, filename) {
+  const link = document.createElement('a');
+  link.href = canvas.toDataURL('image/png');
+  link.download = filename;
+  link.click();
+}
+
+function TicketTable({ tickets, role, onPng, onCsv }) {
+  return (
+    <>
+      <div className="ticket-actions-row">
+        <button type="button" className="secondary-button" onClick={() => onCsv(tickets)} disabled={!tickets.length}>Exportar CSV</button>
+      </div>
+      <div className="ticket-table-wrapper">
+        <table className="ticket-table">
+          <thead>
+            <tr>
+              {['ID', 'Titulo', 'Categoria', 'Estado', 'Prioridad', 'Usuario', 'Tecnico', 'Sync', 'Acciones'].map((h) => <th key={h}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {tickets.length ? tickets.map((ticket) => (
+              <tr key={ticket.id}>
+                <td className="mono-cell">{ticket.id}</td>
+                <td>{ticket.titulo}</td>
+                <td>{ticket.categoria}</td>
+                <td><TicketBadge estado={ticket.estado} /></td>
+                <td><PrioridadDot p={ticket.prioridad} /><span className="priority-label">{ticket.prioridad}</span></td>
+                <td>{ticket.usuario}</td>
+                <td>{ticket.tecnico}</td>
+                <td>{ticket.sincronizado ? 'Si' : 'No'}</td>
+                <td><button type="button" className="secondary-button small-button" onClick={() => onPng(ticket)}>{role === 'usuario' ? 'Mi PNG' : 'PNG'}</button></td>
+              </tr>
+            )) : (
+              <tr><td colSpan="9">No hay tickets disponibles para este rol.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function Dashboard({ dashboard }) {
+  const cards = [
+    ['Total', dashboard.total, '#2563eb'],
+    ['Abiertos', dashboard.abiertos, '#dc2626'],
+    ['En trabajo', dashboard.enTrabajo, '#d97706'],
+    ['Resueltos', dashboard.resueltos, '#16a34a'],
+    ['Sin asignar', dashboard.sinAsignar, '#7c3aed'],
+  ];
+  return (
+    <div className="stats-grid">
+      {cards.map(([label, value, color]) => (
+        <div key={label} className="stats-card" style={{ borderColor: color }}>
+          <div className="stats-label">{label}</div>
+          <div className="stats-value" style={{ color }}>{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PanelAction({ text, button, onClick, disabled }) {
+  return (
+    <div className="report-card">
+      <p>{text}</p>
+      <button type="button" className="primary-button" onClick={onClick} disabled={disabled}>{button}</button>
+    </div>
+  );
+}
+
+function HelpText({ text }) {
+  return <div className="placeholder-panel"><div className="placeholder-title">{text}</div></div>;
+}
+
+function KnowledgeBase() {
+  return (
+    <div>
+      {KNOWLEDGE_BASE.map((item) => (
+        <div key={item.text} className="kb-card">
+          <div className="kb-card-header"><span>{item.keywords.join(', ')}</span></div>
+          <div className="kb-body">{item.text}</div>
+        </div>
+      ))}
     </div>
   );
 }

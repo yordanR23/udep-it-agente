@@ -41,5 +41,5 @@ export default function handler(req, res) {
     return res.status(401).json({ error: 'Contraseña incorrecta.' });
   }
 
-  return res.status(200).json({ role, message: 'Autenticación correcta.' });
+  return res.status(200).json({ role, email: email.trim().toLowerCase(), message: 'Autenticación correcta.' });
 }
