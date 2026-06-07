@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { buildSystemPrompt } from './agentPrompt.js';
 
 dotenv.config();
 
@@ -37,15 +38,23 @@ app.post('/api/chat', async (req, res) => {
     return res.status(500).json({ error: 'AGENT_API_URL y AGENT_API_KEY deben estar definidas.' });
   }
 
-  const { messages } = req.body;
+  const { messages, role, context } = req.body;
   if (!Array.isArray(messages)) {
     return res.status(400).json({ error: 'El cuerpo debe contener un arreglo `messages`.' });
   }
 
   const headers = buildHeaders();
+  const chatMessages = [
+    { role: 'system', content: buildSystemPrompt(role, context) },
+    ...messages.map((message) => ({
+      role: message.role,
+      content: message.content || message.text || '',
+    })),
+  ];
   const body = {
     model: AGENT_MODEL,
-    messages: messages.map((message) => ({ role: message.role, content: message.text })),
+    messages: chatMessages,
+    temperature: 0.3,
   };
 
   try {
@@ -62,7 +71,7 @@ app.post('/api/chat', async (req, res) => {
 
     const data = await response.json();
 
-    if (AGENT_API_PROVIDER === 'openai' || AGENT_API_URL.includes('openai.com')) {
+    if (AGENT_API_PROVIDER === 'openai' || AGENT_API_URL.includes('openai.com') || AGENT_API_URL.includes('openrouter.ai')) {
       const assistantMessage = data.choices?.[0]?.message?.content || JSON.stringify(data);
       return res.json({ content: assistantMessage });
     }

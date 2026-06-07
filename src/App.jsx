@@ -415,9 +415,8 @@ export default function App() {
       return `Ticket ${ticketId} actualizado: ${field} = ${normalize(rawValue)}.`;
     }
 
-    if (q.includes('recomend')) return getRecommendation(q).replace('\n\n', '') || 'Describe el problema técnico para darte una recomendación inicial.';
-    if (isOutOfScope(q)) return outOfScopeMessage();
-    return 'Puedo ayudarte con tareas de mesa de ayuda: crear tickets, ver tus tickets, modificar un campo, eliminar un ticket propio o dar recomendaciones técnicas.';
+    if (q.includes('recomend')) return getRecommendation(q).replace('\n\n', '') || null;
+    return null;
   }
 
   function handleTecnicoCommand(text) {
@@ -461,8 +460,7 @@ export default function App() {
       return `Comentario agregado al ticket ${ticketId}.`;
     }
 
-    if (isOutOfScope(q)) return outOfScopeMessage();
-    return 'Como técnico solo puedo mostrar tus tickets asignados, listar pendientes, agregar comentarios o cambiar estados.';
+    return null;
   }
 
   function handleJefeCommand(text) {
@@ -493,8 +491,55 @@ export default function App() {
       return `Ticket ${ticketId} asignado a ${tecnicoEmail}.`;
     }
 
-    if (isOutOfScope(q)) return outOfScopeMessage();
-    return 'Como jefe puedo ver todos los tickets, dashboard, reportes PDF, gráficos PNG, asignar técnicos y sincronizar con Google Sheets.';
+    return null;
+  }
+
+  function buildAgentMessages(nextUserText) {
+    return [...messages, { role: 'user', text: nextUserText }]
+      .slice(-12)
+      .map((message) => ({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        text: message.text,
+      }));
+  }
+
+  function buildAgentContext() {
+    return {
+      userEmail: currentUser?.email,
+      tickets: visibleTickets,
+    };
+  }
+
+  async function askConversationalAgent(nextUserText) {
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role,
+          context: buildAgentContext(),
+          messages: buildAgentMessages(nextUserText),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo conectar con el agente IA.');
+      return normalize(data.content) || fallbackConversationalReply(nextUserText);
+    } catch (error) {
+      return fallbackConversationalReply(nextUserText, error.message);
+    }
+  }
+
+  function fallbackConversationalReply(text, errorMessage = '') {
+    const recommendation = getRecommendation(text);
+    if (recommendation) return recommendation;
+
+    const base = role === 'jefe'
+      ? 'Puedo ayudarte a revisar indicadores, tickets, asignaciones, reportes o carga operativa. Cuéntame qué decisión o dato necesitas y lo aterrizamos.'
+      : role === 'tecnico'
+        ? 'Puedo ayudarte a diagnosticar el caso, revisar tickets asignados, agregar comentarios o cambiar estados. Describe el síntoma, equipo, ubicación e impacto.'
+        : 'Puedo ayudarte con problemas de red, correo, Moodle, equipos, accesos o creación de tickets. Describe qué ocurre, dónde ocurre y desde cuándo.';
+
+    return errorMessage ? `${base}\n\nNota: no pude consultar el modelo IA en este momento (${errorMessage}).` : base;
   }
 
   async function sendMessage() {
@@ -511,7 +556,8 @@ export default function App() {
         if (role === 'tecnico') reply = handleTecnicoCommand(text);
         if (role === 'jefe') reply = handleJefeCommand(text);
       }
-      appendAssistant(reply || outOfScopeMessage());
+      if (!reply) reply = await askConversationalAgent(text);
+      appendAssistant(reply || fallbackConversationalReply(text));
     } finally {
       setLoading(false);
     }

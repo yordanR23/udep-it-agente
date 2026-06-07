@@ -1,3 +1,5 @@
+import { buildSystemPrompt } from '../agentPrompt.js';
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Método no permitido' });
@@ -12,10 +14,18 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'AGENT_API_URL y AGENT_API_KEY deben estar definidas.' });
   }
 
-  const { messages } = req.body;
+  const { messages, role, context } = req.body;
   if (!Array.isArray(messages)) {
     return res.status(400).json({ error: 'El cuerpo debe contener un arreglo `messages`.' });
   }
+
+  const chatMessages = [
+    { role: 'system', content: buildSystemPrompt(role, context) },
+    ...messages.map((message) => ({
+      role: message.role,
+      content: message.content || message.text || '',
+    })),
+  ];
 
   let headers = {
     'Content-Type': 'application/json',
@@ -24,7 +34,8 @@ export default async function handler(req, res) {
 
   const body = {
     model: AGENT_MODEL,
-    messages: messages.map((message) => ({ role: message.role, content: message.text })),
+    messages: chatMessages,
+    temperature: 0.3,
   };
 
   try {
