@@ -99,6 +99,7 @@ const KNOWLEDGE_BASE = [
 const TICKET_FIELDS = ['titulo', 'categoria', 'descripcion', 'prioridad', 'aula', 'edificio'];
 const STATES = ['abierto', 'en_proceso', 'resuelto', 'pendiente'];
 const CATEGORIES = ['Red', 'Hardware', 'Software', 'Accesos', 'Otro'];
+const RESOLVE_TICKET_REGEX = /(?:cerrar|cierra|cerrado|resolver|resuelve|resuelto|solucionar|solucionado|atender|atiende|atendido).*(TKT-\d+)/i;
 
 function TypingDots() {
   return (
@@ -390,6 +391,14 @@ export default function App() {
 
     if (isTicketCreationIntent(q)) return startTicketConversation(text);
 
+    const resolveMatch = text.match(RESOLVE_TICKET_REGEX);
+    if (resolveMatch) {
+      const ticketId = resolveMatch[1].toUpperCase();
+      const ticket = ownTickets.find((t) => t.id === ticketId);
+      if (!ticket) return 'No puedo cerrar ese ticket porque no pertenece a tu usuario o no existe.';
+      return 'No tienes permisos para cerrar tickets. Un tecnico o jefe de TI debe marcarlo como resuelto.';
+    }
+
     if (q.includes('mis tickets') || q.includes('ver tickets') || q.includes('estado')) {
       return summarizeTickets(ownTickets, 'Tus tickets');
     }
@@ -425,6 +434,24 @@ export default function App() {
 
     if (q.includes('pendientes')) return summarizeTickets(assigned.filter((t) => t.estado !== 'resuelto'), 'Tus tickets pendientes');
     if (q.includes('tickets') || q.includes('asignados')) return summarizeTickets(assigned, 'Tus tickets asignados');
+
+    const resolveMatch = text.match(RESOLVE_TICKET_REGEX);
+    if (resolveMatch) {
+      const ticketId = resolveMatch[1].toUpperCase();
+      const ticket = assigned.find((t) => t.id === ticketId);
+      if (!ticket) return 'No puedes cerrar ese ticket porque no esta asignado a tu usuario.';
+      updateTicket(ticketId, (t) => ({
+        ...t,
+        estado: 'resuelto',
+        comentarios: [
+          ...(t.comentarios || []),
+          { autor: currentUser.email, texto: 'Ticket marcado como resuelto por soporte TI.', fecha: new Date().toISOString() },
+        ],
+        fechaModificacion: new Date().toISOString().slice(0, 10),
+        sincronizado: false,
+      }));
+      return `Ticket ${ticketId} actualizado a ${statusLabel('resuelto')}.`;
+    }
 
     const startedMatch = text.match(/(?:iniciad[oa]|empec[eé]|comenc[eé]|atenci[oó]n|atendiendo|en atenci[oó]n).*(TKT-\d+)/i);
     if (startedMatch) {
@@ -479,6 +506,24 @@ export default function App() {
     if (q.includes('sincron')) {
       syncTicketsToSheet(tickets);
       return 'Sincronización con Google Sheets iniciada.';
+    }
+
+    const resolveMatch = text.match(RESOLVE_TICKET_REGEX);
+    if (resolveMatch) {
+      const ticketId = resolveMatch[1].toUpperCase();
+      const ticket = tickets.find((t) => t.id === ticketId);
+      if (!ticket) return `No existe el ticket ${ticketId}.`;
+      updateTicket(ticketId, (t) => ({
+        ...t,
+        estado: 'resuelto',
+        comentarios: [
+          ...(t.comentarios || []),
+          { autor: currentUser.email, texto: 'Ticket marcado como resuelto por jefatura TI.', fecha: new Date().toISOString() },
+        ],
+        fechaModificacion: new Date().toISOString().slice(0, 10),
+        sincronizado: false,
+      }));
+      return `Ticket ${ticketId} actualizado a ${statusLabel('resuelto')}.`;
     }
 
     const assignMatch = text.match(/asignar\s+(TKT-\d+)\s+(?:a\s+)?([^\s]+@[^\s]+)/i);
@@ -877,7 +922,7 @@ function inferPriority(text) {
 function normalizeState(text) {
   const q = lower(text);
   if (['en progreso', 'en proceso', 'en atencion', 'en atención', 'atendiendo', 'iniciado'].some((state) => q.includes(state))) return 'en_proceso';
-  if (q.includes('resuelto') || q.includes('cerrado') || q.includes('solucionado')) return 'resuelto';
+  if (q.includes('resuelto') || q.includes('cerrado') || q.includes('solucionado') || q.includes('atendido')) return 'resuelto';
   if (q.includes('pendiente')) return 'pendiente';
   if (q.includes('abierto')) return 'abierto';
   return q.replace(/\s+/g, '_');
