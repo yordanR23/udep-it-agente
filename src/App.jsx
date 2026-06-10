@@ -27,8 +27,8 @@ const ROLES = {
     label: 'Jefe',
     subtitle: 'Gestión de Mesa de Ayuda',
     icon: '📊',
-    tools: ['todos_tickets', 'dashboard', 'reportes', 'graficos', 'asignar_tecnico', 'sincronizar_sheets'],
-    welcome: 'Panel de jefatura activo. Puedes consultar todos los tickets, ver indicadores, generar reportes PDF/PNG, asignar técnicos y sincronizar con Google Sheets.',
+    tools: ['todos_tickets', 'dashboard', 'asignar_tecnico', 'sincronizar_sheets'],
+    welcome: 'Panel de jefatura activo. Puedes consultar todos los tickets, ver indicadores y asignar técnicos. Genera reportes o gráficos desde el chat.',
   },
 };
 
@@ -38,8 +38,6 @@ const TOOLS_META = {
   pendientes: { icon: '⏱️', label: 'Pendientes', desc: 'Abiertos o en proceso' },
   todos_tickets: { icon: '📚', label: 'Todos los tickets', desc: 'Vista global' },
   dashboard: { icon: '📊', label: 'Dashboard', desc: 'Indicadores clave' },
-  reportes: { icon: '📄', label: 'Reportes PDF', desc: 'Reporte general' },
-  graficos: { icon: '🥧', label: 'Gráficos', desc: 'Temporal y circular' },
   asignar_tecnico: { icon: '👥', label: 'Asignar técnico', desc: 'Asignación manual' },
   sincronizar_sheets: { icon: '🔄', label: 'Google Sheets', desc: 'Sincronizar datos' },
   base_conocimiento: { icon: '💡', label: 'Recomendaciones', desc: 'Ayuda rápida' },
@@ -545,29 +543,31 @@ export default function App() {
     const implicitTicketId = getImplicitTicketId(tickets.length === 1 ? tickets : [], text);
 
     if (q.includes('dashboard') || q.includes('indicadores')) return dashboardText(dashboard);
-    if (q.includes('todos') || q.includes('tickets')) return summarizeTickets(tickets, 'Todos los tickets del sistema');
     if (q.includes('pdf') || q.includes('reporte')) {
       downloadReportPdf();
       return 'Reporte general PDF generado.';
     }
-    if (q.includes('png') || q.includes('imagen') || q.includes('grafico') || q.includes('gráfico')) {
-      downloadChartsPng();
-      return 'Resumen gráfico PNG generado con serie temporal y gráfico circular.';
+    if (q.includes('grafico temporal') || q.includes('serie temporal') || q.includes('temporal')) {
+      downloadTemporalChartPng();
+      return 'Gráfico temporal de incidentes generado en PNG.';
     }
+    if (q.includes('grafico circular') || q.includes('circular') || q.includes('grafico por prioridad') || q.includes('grafico por estado')) {
+      const type = q.includes('prioridad') ? 'prioridad' : 'estado';
+      downloadCircularChartPng(type);
+      return `Gráfico circular por ${type} generado en PNG.`;
+    }
+    if (q.includes('todos') || q.includes('tickets')) return summarizeTickets(tickets, 'Todos los tickets del sistema');
     if (q.includes('sincron')) {
       syncTicketsToSheet(tickets);
       return 'Sincronización con Google Sheets iniciada.';
     }
 
-<<<<<<< HEAD
-=======
     const fieldUpdate = parseTicketFieldUpdate(text, implicitTicketId);
     if (fieldUpdate) {
       const result = applyTicketFieldUpdate(fieldUpdate.ticketId, fieldUpdate.field, fieldUpdate.value, tickets);
       return result || `No existe el ticket ${fieldUpdate.ticketId}.`;
     }
 
->>>>>>> 639050d (Update changes for GitHub)
     const resolveMatch = text.match(RESOLVE_TICKET_REGEX);
     if (resolveMatch) {
       const ticketId = resolveMatch[1].toUpperCase();
@@ -669,9 +669,48 @@ export default function App() {
   }
 
   function buildCsvText(ticketsToExport) {
-    const header = ['ID', 'Titulo', 'Categoria', 'Estado', 'Prioridad', 'Usuario', 'Tecnico', 'Fecha', 'Descripcion'];
-    const rows = ticketsToExport.map((ticket) => [ticket.id, ticket.titulo, ticket.categoria, ticket.estado, ticket.prioridad, ticket.usuario, ticket.tecnico, ticket.fecha, ticket.descripcion]);
+    const header = ['ID', 'Titulo', 'Categoria', 'Estado', 'Prioridad', 'Aula', 'Edificio', 'Usuario', 'Tecnico', 'Fecha', 'Descripcion'];
+    const rows = ticketsToExport.map((ticket) => [ticket.id, ticket.titulo, ticket.categoria, ticket.estado, ticket.prioridad, ticket.aula, ticket.edificio, ticket.usuario, ticket.tecnico, ticket.fecha, ticket.descripcion]);
     return [header, ...rows].map((row) => row.map((cell) => `"${String(cell || '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  }
+
+  function buildReportSummary(tickets) {
+    const total = tickets.length;
+    const abiertos = tickets.filter((t) => t.estado === 'abierto').length;
+    const enTrabajo = tickets.filter((t) => t.estado === 'en_proceso' || t.estado === 'pendiente').length;
+    const resueltos = tickets.filter((t) => t.estado === 'resuelto').length;
+    const topCategory = tickets.reduce((counts, ticket) => {
+      counts[ticket.categoria] = (counts[ticket.categoria] || 0) + 1;
+      return counts;
+    }, {});
+    const sortedCategories = Object.entries(topCategory).sort((a, b) => b[1] - a[1]);
+    const frequentCategory = sortedCategories[0] ? `${sortedCategories[0][0]} (${sortedCategories[0][1]})` : 'N/A';
+    const highPriority = tickets.filter((t) => t.prioridad === 'alta').length;
+
+    return [
+      `Resumen generado por IA: Se han registrado ${total} tickets en el periodo.`,
+      `Actualmente hay ${abiertos} ticket(s) abiertos, ${enTrabajo} en proceso/pendientes y ${resueltos} resuelto(s).`,
+      `La categoría más frecuente es ${frequentCategory}.`,
+      `Hay ${highPriority} ticket(s) de prioridad alta que requieren atención inmediata.`,
+      `Recomiendo revisar primero los tickets de prioridad alta y los de la categoría más común para reducir el volumen de solicitudes recurrentes.`,
+    ].join(' ');
+  }
+
+  function buildReportRecommendations(tickets) {
+    const recommendations = [];
+    if (tickets.some((t) => t.prioridad === 'alta')) {
+      recommendations.push('Atender los tickets de prioridad alta lo antes posible para evitar impacto en la operación.');
+    }
+    if (tickets.some((t) => t.estado === 'abierto')) {
+      recommendations.push('Revisar los tickets abiertos y asignarlos a técnicos para que no queden sin seguimiento.');
+    }
+    if (tickets.some((t) => t.tecnico === 'Sin asignar')) {
+      recommendations.push('Asignar técnicos a los tickets sin responsable para mejorar la trazabilidad.');
+    }
+    if (!recommendations.length) {
+      recommendations.push('El flujo de gestión está estable; continúa con el seguimiento normal y la sincronización periódica con Google Sheets.');
+    }
+    return recommendations;
   }
 
   function downloadTicketsCsv(ticketsToExport = visibleTickets) {
@@ -713,25 +752,158 @@ export default function App() {
     ctx.font = '26px sans-serif';
     ctx.fillText('Mesa de Ayuda - Graficos', 32, 46);
     drawTimeSeries(ctx, tickets, 40, 95, 560, 220);
-    drawPie(ctx, tickets, 760, 205, 115);
+    drawCircularChart(ctx, tickets, 760, 205, 115, 'estado');
     downloadCanvas(canvas, 'resumen-tickets.png');
+  }
+
+  function downloadTemporalChartPng() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1000;
+    canvas.height = 380;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#0f172a';
+    ctx.font = '24px sans-serif';
+    ctx.fillText('Mesa de Ayuda - Gráfico Temporal', 32, 44);
+    drawTimeSeries(ctx, tickets, 40, 90, 920, 240);
+    downloadCanvas(canvas, 'grafico-temporal-tickets.png');
+  }
+
+  function downloadCircularChartPng(type = 'estado') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 620;
+    canvas.height = 420;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#0f172a';
+    ctx.font = '24px sans-serif';
+    const title = type === 'prioridad' ? 'Gráfico Circular por Prioridad' : 'Gráfico Circular por Estado';
+    ctx.fillText(title, 32, 44);
+    drawCircularChart(ctx, tickets, 320, 240, 140, type);
+    downloadCanvas(canvas, `grafico-circular-${type}.png`);
+  }
+
+  function drawCircularChart(ctx, tickets, cx, cy, radius, type = 'estado') {
+    const items = type === 'prioridad' ? PRIORITIES : STATES;
+    const colors = type === 'prioridad' ? ['#ef4444', '#f59e0b', '#10b981'] : ['#dc2626', '#d97706', '#16a34a', '#2563eb'];
+    const counts = items.map((item) => tickets.filter((ticket) => (type === 'prioridad' ? ticket.prioridad === item : ticket.estado === item)).length);
+    const total = Math.max(counts.reduce((sum, count) => sum + count, 0), 1);
+    let start = -Math.PI / 2;
+    for (let index = 0; index < items.length; index += 1) {
+      const count = counts[index];
+      const angle = (count / total) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, radius, start, start + angle);
+      ctx.closePath();
+      ctx.fillStyle = colors[index];
+      ctx.fill();
+      start += angle;
+    }
+    ctx.font = '12px sans-serif';
+    items.forEach((item, index) => {
+      ctx.fillStyle = colors[index];
+      ctx.fillRect(cx - radius, cy + radius + 24 + index * 20, 12, 12);
+      ctx.fillStyle = '#475569';
+      const label = type === 'prioridad' ? item : statusLabel(item);
+      ctx.fillText(`${label}: ${counts[index]}`, cx - radius + 18, cy + radius + 34 + index * 20);
+    });
   }
 
   function downloadReportPdf() {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const title = 'Reporte general de Mesa de Ayuda';
+    const now = new Date().toLocaleString();
+    const summary = buildReportSummary(tickets);
+    const recommendations = buildReportRecommendations(tickets);
+
     doc.setFontSize(18);
-    doc.text('Reporte general de Mesa de Ayuda', 40, 50);
-    doc.setFontSize(11);
-    doc.text(`Generado: ${new Date().toLocaleString()}`, 40, 70);
-    doc.text(`Total: ${tickets.length}`, 40, 100);
-    doc.text(`Abiertos: ${dashboard.abiertos}`, 40, 118);
-    doc.text(`En progreso/pendientes: ${dashboard.enTrabajo}`, 40, 136);
-    doc.text(`Resueltos: ${dashboard.resueltos}`, 40, 154);
-    let y = 190;
-    tickets.slice(0, 18).forEach((ticket) => {
-      doc.text(`${ticket.id} | ${statusLabel(ticket.estado)} | ${ticket.prioridad} | ${ticket.titulo}`, 40, y);
-      y += 18;
+    doc.text(title, 40, 50);
+    doc.setFontSize(10);
+    doc.text(`Fecha: ${now}`, 40, 70);
+    doc.text(`Tickets totales: ${tickets.length}`, 40, 85);
+    doc.text(`Abiertos: ${dashboard.abiertos}`, 40, 100);
+    doc.text(`En progreso/pendientes: ${dashboard.enTrabajo}`, 40, 115);
+    doc.text(`Resueltos: ${dashboard.resueltos}`, 40, 130);
+
+    doc.setFontSize(12);
+    doc.text('Resumen generado por IA', 40, 160);
+    doc.setFontSize(10);
+    const summaryLines = doc.splitTextToSize(summary, 520);
+    doc.text(summaryLines, 40, 176);
+
+    let nextY = 176 + summaryLines.length * 14 + 20;
+    doc.setFontSize(12);
+    doc.text('Recomendaciones', 40, nextY);
+    doc.setFontSize(10);
+    nextY += 16;
+    recommendations.forEach((item) => {
+      const lines = doc.splitTextToSize(`• ${item}`, 520);
+      doc.text(lines, 40, nextY);
+      nextY += lines.length * 14 + 4;
     });
+
+    nextY += 20;
+    doc.setFontSize(12);
+    doc.text('Detalle de tickets', 40, nextY);
+    nextY += 18;
+
+    const headers = ['ID', 'Titulo', 'Categoria', 'Estado', 'Prioridad', 'Aula', 'Edificio', 'Usuario', 'Tecnico', 'Fecha'];
+    const columnWidths = [50, 130, 60, 52, 50, 50, 50, 70, 70, 50];
+    const startX = 40;
+    const rowHeight = 14;
+    const tableTop = nextY;
+
+    function addTableHeader(y) {
+      let x = startX;
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      headers.forEach((header, index) => {
+        doc.text(header, x, y);
+        x += columnWidths[index];
+      });
+      doc.setFont('helvetica', 'normal');
+    }
+
+    function addTableRow(row, y) {
+      let x = startX;
+      row.forEach((cell, index) => {
+        const lines = doc.splitTextToSize(String(cell || ''), columnWidths[index] - 4);
+        doc.text(lines, x, y);
+        x += columnWidths[index];
+      });
+    }
+
+    addTableHeader(nextY);
+    nextY += rowHeight;
+
+    tickets.forEach((ticket, index) => {
+      const row = [
+        ticket.id,
+        ticket.titulo,
+        ticket.categoria,
+        statusLabel(ticket.estado),
+        ticket.prioridad,
+        ticket.aula,
+        ticket.edificio,
+        ticket.usuario,
+        ticket.tecnico,
+        ticket.fecha,
+      ];
+      const rowLines = row.map((cell, colIndex) => doc.splitTextToSize(String(cell || ''), columnWidths[colIndex] - 4).length);
+      const height = Math.max(...rowLines) * 10 + 4;
+      if (nextY + height > 800) {
+        doc.addPage();
+        nextY = 40;
+        addTableHeader(nextY);
+        nextY += rowHeight;
+      }
+      addTableRow(row, nextY);
+      nextY += height;
+    });
+
     doc.save('reporte-mesa-ayuda.pdf');
   }
 
@@ -861,9 +1033,7 @@ export default function App() {
                 />
               )}
 
-              {panel === 'dashboard' && <Dashboard dashboard={dashboard} />}
-              {panel === 'reportes' && <PanelAction text="Genera un reporte general en PDF con todos los tickets." button="Descargar PDF" onClick={downloadReportPdf} disabled={!tickets.length} />}
-              {panel === 'graficos' && <PanelAction text="Exporta un resumen PNG con serie temporal y gráfico circular." button="Descargar PNG" onClick={downloadChartsPng} disabled={!tickets.length} />}
+              {panel === 'dashboard' && <Dashboard dashboard={dashboard} tickets={tickets} />}
               {panel === 'asignar_tecnico' && <HelpText text="Usa el chat: asignar TKT-001 a tecnico@udep.pe" />}
               {panel === 'sincronizar_sheets' && (
                 <PanelAction
@@ -1211,41 +1381,14 @@ function drawTimeSeries(ctx, tickets, x, y, width, height) {
   labels.slice(0, 6).forEach((label, index) => ctx.fillText(label, x + index * 90, y + height + 22));
 }
 
-function drawPie(ctx, tickets, cx, cy, radius) {
-  ctx.fillStyle = '#0f172a';
-  ctx.font = '17px sans-serif';
-  ctx.fillText('Tickets por estado', cx - 80, cy - radius - 36);
-  const colors = ['#dc2626', '#d97706', '#16a34a', '#2563eb'];
-  const counts = STATES.map((state) => tickets.filter((ticket) => ticket.estado === state).length);
-  const total = Math.max(counts.reduce((sum, count) => sum + count, 0), 1);
-  let start = -Math.PI / 2;
-  counts.forEach((count, index) => {
-    const angle = (count / total) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, radius, start, start + angle);
-    ctx.closePath();
-    ctx.fillStyle = colors[index];
-    ctx.fill();
-    start += angle;
-  });
-  ctx.font = '12px sans-serif';
-  STATES.forEach((state, index) => {
-    ctx.fillStyle = colors[index];
-    ctx.fillRect(cx - 90, cy + radius + 28 + index * 20, 12, 12);
-    ctx.fillStyle = '#475569';
-    ctx.fillText(`${statusLabel(state)}: ${counts[index]}`, cx - 70, cy + radius + 39 + index * 20);
-  });
-}
+  function downloadCanvas(canvas, filename) {
+    const link = document.createElement('a');
+    link.href = canvas.toDataURL('image/png');
+    link.download = filename;
+    link.click();
+  }
 
-function downloadCanvas(canvas, filename) {
-  const link = document.createElement('a');
-  link.href = canvas.toDataURL('image/png');
-  link.download = filename;
-  link.click();
-}
-
-function TicketTable({ tickets, role, onPng, onCsv }) {
+  function TicketTable({ tickets, role, onPng, onCsv }) {
   return (
     <>
       <div className="ticket-actions-row">
@@ -1255,24 +1398,29 @@ function TicketTable({ tickets, role, onPng, onCsv }) {
         <table className="ticket-table">
           <thead>
             <tr>
-              {['ID', 'Titulo', 'Categoria', 'Estado', 'Prioridad', 'Usuario', 'Tecnico', 'Sync', 'Acciones'].map((h) => <th key={h}>{h}</th>)}
+              {['ID', 'Titulo', 'Categoria', 'Estado', 'Prioridad', 'Aula', 'Edificio', 'Usuario', 'Tecnico', 'Sync', 'Acciones'].map((h) => <th key={h}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
             {tickets.length ? tickets.map((ticket) => (
               <tr key={ticket.id}>
                 <td className="mono-cell">{ticket.id}</td>
-                <td>{ticket.titulo}</td>
+                <td>
+                  <div>{ticket.titulo}</div>
+                  {ticket.descripcion && <div className="ticket-description">{ticket.descripcion.length > 80 ? `${ticket.descripcion.slice(0, 80)}...` : ticket.descripcion}</div>}
+                </td>
                 <td>{ticket.categoria}</td>
                 <td><TicketBadge estado={ticket.estado} /></td>
                 <td><PrioridadDot p={ticket.prioridad} /><span className="priority-label">{ticket.prioridad}</span></td>
+                <td>{ticket.aula}</td>
+                <td>{ticket.edificio}</td>
                 <td>{ticket.usuario}</td>
                 <td>{ticket.tecnico}</td>
                 <td>{ticket.sincronizado ? 'Si' : 'No'}</td>
                 <td><button type="button" className="secondary-button small-button" onClick={() => onPng(ticket)}>{role === 'usuario' ? 'Mi PNG' : 'PNG'}</button></td>
               </tr>
             )) : (
-              <tr><td colSpan="9">No hay tickets disponibles para este rol.</td></tr>
+              <tr><td colSpan="11">No hay tickets disponibles para este rol.</td></tr>
             )}
           </tbody>
         </table>
@@ -1281,7 +1429,40 @@ function TicketTable({ tickets, role, onPng, onCsv }) {
   );
 }
 
-function Dashboard({ dashboard }) {
+function Dashboard({ dashboard, tickets }) {
+  const temporalRef = useRef(null);
+  const circularRef = useRef(null);
+
+  useEffect(() => {
+    const temporalCanvas = temporalRef.current;
+    const circularCanvas = circularRef.current;
+    if (temporalCanvas) {
+      const ctx = temporalCanvas.getContext('2d');
+      ctx.clearRect(0, 0, temporalCanvas.width, temporalCanvas.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, temporalCanvas.width, temporalCanvas.height);
+      drawTimeSeries(ctx, tickets, 20, 40, temporalCanvas.width - 60, 180);
+    }
+    if (circularCanvas) {
+      const ctx = circularCanvas.getContext('2d');
+      ctx.clearRect(0, 0, circularCanvas.width, circularCanvas.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, circularCanvas.width, circularCanvas.height);
+      drawCircularChart(ctx, tickets, circularCanvas.width / 2, 200, 110, 'estado');
+    }
+  }, [tickets]);
+
+  const alerts = [];
+  if (dashboard.abiertos > 3) {
+    alerts.push(`Alerta: ${dashboard.abiertos} tickets aún están abiertos. Prioriza su atención.`);
+  }
+  if (dashboard.sinAsignar > 0) {
+    alerts.push(`Alerta: ${dashboard.sinAsignar} ticket(s) sin asignar a técnico.`);
+  }
+  if (dashboard.total === 0) {
+    alerts.push('No se han registrado tickets aún. El sistema está limpio.');
+  }
+
   const cards = [
     ['Total', dashboard.total, '#2563eb'],
     ['Abiertos', dashboard.abiertos, '#dc2626'],
@@ -1289,14 +1470,37 @@ function Dashboard({ dashboard }) {
     ['Resueltos', dashboard.resueltos, '#16a34a'],
     ['Sin asignar', dashboard.sinAsignar, '#7c3aed'],
   ];
+
   return (
-    <div className="stats-grid">
-      {cards.map(([label, value, color]) => (
-        <div key={label} className="stats-card" style={{ borderColor: color }}>
-          <div className="stats-label">{label}</div>
-          <div className="stats-value" style={{ color }}>{value}</div>
+    <div style={{ display: 'grid', gap: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+        {cards.map(([label, value, color]) => (
+          <div key={label} style={{ border: `1px solid ${color}`, borderRadius: 16, padding: 20, background: '#f8fafc' }}>
+            <div style={{ fontSize: 14, color: '#334155', marginBottom: 8 }}>{label}</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {alerts.length > 0 && (
+        <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 16, padding: 18 }}>
+          <strong style={{ display: 'block', marginBottom: 8 }}>Alertas</strong>
+          {alerts.map((alert, index) => (
+            <div key={index} style={{ color: '#334155', marginBottom: 6 }}>{alert}</div>
+          ))}
         </div>
-      ))}
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '18px' }}>
+        <div style={{ border: '1px solid #cbd5e1', borderRadius: 16, padding: 16, background: '#ffffff' }}>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>Evolución temporal</div>
+          <canvas ref={temporalRef} width={660} height={260} style={{ width: '100%', borderRadius: 12, background: '#ffffff' }} />
+        </div>
+        <div style={{ border: '1px solid #cbd5e1', borderRadius: 16, padding: 16, background: '#ffffff' }}>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>Distribución por estado</div>
+          <canvas ref={circularRef} width={320} height={280} style={{ width: '100%', borderRadius: 12, background: '#ffffff' }} />
+        </div>
+      </div>
     </div>
   );
 }
