@@ -99,7 +99,9 @@ const KNOWLEDGE_BASE = [
 const TICKET_FIELDS = ['titulo', 'categoria', 'descripcion', 'prioridad', 'aula', 'edificio'];
 const STATES = ['abierto', 'en_proceso', 'resuelto', 'pendiente'];
 const CATEGORIES = ['Red', 'Hardware', 'Software', 'Accesos', 'Otro'];
+const PRIORITIES = ['alta', 'media', 'baja'];
 const RESOLVE_TICKET_REGEX = /(?:cerrar|cierra|cerrado|resolver|resuelve|resuelto|solucionar|solucionado|atender|atiende|atendido).*(TKT-\d+)/i;
+const PRIORITY_RANK = { baja: 1, media: 2, alta: 3 };
 
 function TypingDots() {
   return (
@@ -274,12 +276,24 @@ export default function App() {
 
   function mergeTicketDraft(base, text) {
     const extracted = extractTicketData(text);
+    const explicitPriority = normalizePriority(text);
+    const category = extracted.categoria !== 'Otro'
+      ? extracted.categoria
+      : base.categoria || extracted.categoria;
+    const priority = !base.prioridad || explicitPriority || PRIORITY_RANK[extracted.prioridad] > PRIORITY_RANK[base.prioridad]
+      ? extracted.prioridad
+      : base.prioridad;
+    const descripcion = normalize(base.descripcion)
+      ? `${base.descripcion}\n${normalize(text)}`.trim()
+      : extracted.descripcion || normalize(text);
+
     return {
       ...base,
-      ...Object.fromEntries(Object.entries(extracted).filter(([, value]) => normalize(value))),
-      descripcion: normalize(base.descripcion)
-        ? `${base.descripcion}\n${normalize(text)}`.trim()
-        : extracted.descripcion || normalize(text),
+      ...Object.fromEntries(Object.entries(extracted).filter(([key, value]) => normalize(value) && !['categoria', 'prioridad', 'descripcion', 'titulo'].includes(key))),
+      categoria: category,
+      prioridad: priority,
+      descripcion,
+      titulo: buildTicketTitle({ categoria: category, descripcion, aula: extracted.aula || base.aula }),
     };
   }
 
@@ -300,7 +314,7 @@ export default function App() {
 
   function createTicketFromDraft(data) {
     const today = new Date().toISOString().slice(0, 10);
-    const priority = data.prioridad || inferPriority(data.descripcion);
+    const priority = data.prioridad || inferPriority(`${data.categoria} ${data.descripcion} ${data.aula} ${data.edificio}`);
     const autoAssigned = priority === 'alta';
     const createdTicket = {
       id: makeNextTicketId(tickets),
@@ -385,9 +399,57 @@ export default function App() {
     return finishTicketReply(createdTicket);
   }
 
+  function applyTicketFieldUpdate(ticketId, field, rawValue, allowedTickets) {
+    const ticket = allowedTickets.find((t) => t.id === ticketId);
+    if (!ticket) return null;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const value = normalizeFieldValue(field, rawValue);
+    if (!value) return `No pude identificar un valor valido para ${field}.`;
+    if (field === 'prioridad' && !PRIORITIES.includes(value)) return `Prioridad no valida. Usa: ${PRIORITIES.join(', ')}.`;
+    if (field === 'categoria' && !CATEGORIES.includes(value)) return `Categoria no valida. Usa: ${CATEGORIES.join(', ')}.`;
+
+    updateTicket(ticketId, (t) => {
+      const next = {
+        ...t,
+        [field]: value,
+        fechaModificacion: today,
+        sincronizado: false,
+      };
+
+      if (field === 'prioridad' && value === 'alta') {
+        next.estado = t.estado === 'abierto' ? 'pendiente' : t.estado;
+        next.tecnicoId = t.tecnicoId || AUTO_TECHNICIAN_EMAIL;
+        next.tecnico = t.tecnicoId ? t.tecnico : AUTO_TECHNICIAN_EMAIL;
+        next.notificaciones = [
+          ...(t.notificaciones || []),
+          {
+            para: BOSS_NOTIFICATION_LABEL,
+            motivo: `Prioridad actualizada a alta en ${ticketId}.`,
+            fecha: new Date().toISOString(),
+          },
+        ];
+      }
+
+      return next;
+    });
+
+    const assignmentNote = field === 'prioridad' && value === 'alta' && !ticket.tecnicoId
+      ? ` Lo asigné automáticamente a ${AUTO_TECHNICIAN_EMAIL}.`
+      : '';
+    return `Ticket ${ticketId} actualizado: ${field} = ${value}.${assignmentNote}`;
+  }
+
   function handleUsuarioCommand(text) {
     const q = lower(text);
     const ownTickets = getVisibleTickets(tickets, 'usuario', currentUser);
+    const implicitTicketId = getImplicitTicketId(ownTickets, text);
+
+    const fieldUpdate = parseTicketFieldUpdate(text, implicitTicketId);
+    if (fieldUpdate) {
+      const result = applyTicketFieldUpdate(fieldUpdate.ticketId, fieldUpdate.field, fieldUpdate.value, ownTickets);
+      return result || 'No puedo modificar ese ticket porque no pertenece a tu usuario o no existe.';
+    }
 
     if (isTicketCreationIntent(q)) return startTicketConversation(text);
 
@@ -410,18 +472,6 @@ export default function App() {
       if (!ticket) return 'No puedo eliminar ese ticket porque no pertenece a tu usuario o no existe.';
       deleteTicket(ticketId);
       return `Ticket ${ticketId} eliminado.`;
-    }
-
-    const modifyMatch = text.match(/(?:modificar|cambiar|actualizar)\s+(TKT-\d+)\s+([a-záéíóúñ_ ]+?)\s+(?:a|por|=)\s+(.+)/i);
-    if (modifyMatch) {
-      const [, rawId, rawField, rawValue] = modifyMatch;
-      const ticketId = rawId.toUpperCase();
-      const field = normalize(rawField).toLowerCase().replace('urgencia', 'prioridad');
-      const ticket = ownTickets.find((t) => t.id === ticketId);
-      if (!ticket) return 'No puedo modificar ese ticket porque no pertenece a tu usuario o no existe.';
-      if (!TICKET_FIELDS.includes(field)) return `Solo puedes modificar estos campos: ${TICKET_FIELDS.join(', ')}.`;
-      updateTicket(ticketId, (t) => ({ ...t, [field]: normalize(rawValue), fechaModificacion: new Date().toISOString().slice(0, 10), sincronizado: false }));
-      return `Ticket ${ticketId} actualizado: ${field} = ${normalize(rawValue)}.`;
     }
 
     if (q.includes('recomend')) return getRecommendation(q).replace('\n\n', '') || null;
@@ -492,6 +542,7 @@ export default function App() {
 
   function handleJefeCommand(text) {
     const q = lower(text);
+    const implicitTicketId = getImplicitTicketId(tickets.length === 1 ? tickets : [], text);
 
     if (q.includes('dashboard') || q.includes('indicadores')) return dashboardText(dashboard);
     if (q.includes('todos') || q.includes('tickets')) return summarizeTickets(tickets, 'Todos los tickets del sistema');
@@ -508,6 +559,15 @@ export default function App() {
       return 'Sincronización con Google Sheets iniciada.';
     }
 
+<<<<<<< HEAD
+=======
+    const fieldUpdate = parseTicketFieldUpdate(text, implicitTicketId);
+    if (fieldUpdate) {
+      const result = applyTicketFieldUpdate(fieldUpdate.ticketId, fieldUpdate.field, fieldUpdate.value, tickets);
+      return result || `No existe el ticket ${fieldUpdate.ticketId}.`;
+    }
+
+>>>>>>> 639050d (Update changes for GitHub)
     const resolveMatch = text.match(RESOLVE_TICKET_REGEX);
     if (resolveMatch) {
       const ticketId = resolveMatch[1].toUpperCase();
@@ -866,6 +926,18 @@ function getVisibleTickets(tickets, role, currentUser) {
   return [];
 }
 
+function getImplicitTicketId(ticketList, text) {
+  if (!ticketList.length) return '';
+  if (ticketList.length === 1) return ticketList[0].id;
+
+  const q = lower(text);
+  if (['mi ticket', 'el ticket', 'este ticket', 'ese ticket', 'ultimo ticket', 'último ticket', 'reciente'].some((phrase) => q.includes(phrase))) {
+    return ticketList[0].id;
+  }
+
+  return '';
+}
+
 function extractTicketData(text) {
   const raw = normalize(text);
   const q = lower(raw);
@@ -890,33 +962,117 @@ function inferCategory(text) {
   const q = lower(text);
   const match = KNOWLEDGE_BASE.find((item) => item.keywords.some((keyword) => q.includes(keyword)));
   if (match) return match.category;
-  if (['laptop', 'pc', 'equipo', 'impresora', 'teclado', 'mouse'].some((word) => q.includes(word))) return 'Hardware';
-  if (['software', 'programa', 'aplicacion', 'aplicación', 'sistema'].some((word) => q.includes(word))) return 'Software';
-  if (['usuario', 'permiso', 'acceso', 'cuenta'].some((word) => q.includes(word))) return 'Accesos';
+  if (['laptop', 'pc', 'computadora', 'equipo', 'impresora', 'teclado', 'mouse', 'proyector', 'pantalla', 'hdmi', 'cable', 'adaptador', 'audio', 'parlante', 'microfono', 'micrófono', 'camara', 'cámara'].some((word) => q.includes(word))) return 'Hardware';
+  if (['software', 'programa', 'aplicacion', 'aplicación', 'sistema', 'moodle', 'aula virtual', 'campus virtual', 'zoom', 'teams', 'office', 'excel', 'word', 'navegador', 'licencia'].some((word) => q.includes(word))) return 'Software';
+  if (['usuario', 'permiso', 'acceso', 'cuenta', 'contraseña', 'password', 'clave', 'correo', 'bloqueada', 'login', 'inicio de sesion', 'inicio de sesión'].some((word) => q.includes(word))) return 'Accesos';
+  if (['wifi', 'wi-fi', 'internet', 'red', 'conexion', 'conexión', 'vpn', 'dns', 'cable de red', 'ethernet', 'sin señal'].some((word) => q.includes(word))) return 'Red';
   return 'Otro';
 }
 
 function inferAula(text) {
-  const q = normalize(text);
-  const aulaMatch = q.match(/\b(?:aula|salon|salón|laboratorio|lab|oficina)\s+([a-z0-9-]+)/i);
-  if (aulaMatch) return `${capitalize(aulaMatch[0].replace(/\s+/g, ' '))}`;
+  const q = normalize(text).replace(/\s+/g, ' ');
+  const aulaMatch = q.match(/\b(aula|salon|salón|laboratorio|lab|oficina|ambiente)\s+([a-z0-9-]+(?:\s+[a-z0-9-]+)?)/i);
+  if (aulaMatch) return `${capitalize(aulaMatch[1])} ${aulaMatch[2].toUpperCase()}`;
   const simpleRoomMatch = q.match(/\b([A-Z]?\d{2,3}[A-Z]?|[A-Z]-\d{2,3})\b/);
   return simpleRoomMatch ? `Aula ${simpleRoomMatch[1]}` : '';
 }
 
 function inferEdificio(text) {
-  const q = normalize(text);
-  const explicit = q.match(/\b(?:edificio|bloque|pabellon|pabellón)\s+([a-z0-9-]+)/i);
-  if (explicit) return capitalize(explicit[0].replace(/\s+/g, ' '));
+  const q = normalize(text).replace(/\s+/g, ' ');
+  const explicit = q.match(/\b(edificio|bloque|pabellon|pabellón)\s+([a-z0-9-]+(?:\s+[a-z0-9-]+)?)/i);
+  if (explicit) return `${capitalize(explicit[1])} ${explicit[2].toUpperCase()}`;
   const block = q.match(/\b(?:bloque)\s*([a-z])\b/i);
   return block ? `Bloque ${block[1].toUpperCase()}` : '';
 }
 
 function inferPriority(text) {
   const q = lower(text);
-  if (['urgente', 'critico', 'crítico', 'no hay internet', 'toda el aula', 'toda la clase', 'clase en curso', 'examen', 'laboratorio completo'].some((word) => q.includes(word))) return 'alta';
-  if (['no puedo', 'bloqueado', 'no funciona', 'falla', 'intermitente'].some((word) => q.includes(word))) return 'media';
+  const explicit = normalizePriority(q);
+  if (explicit) return explicit;
+  if (['urgente', 'critico', 'crítico', 'grave', 'no hay internet', 'sin internet', 'sin red', 'toda el aula', 'toda la aula', 'toda la clase', 'todos los alumnos', 'varios usuarios', 'clase en curso', 'examen', 'evaluacion', 'evaluación', 'sustentacion', 'sustentación', 'laboratorio completo', 'servicio caido', 'servicio caído', 'caido', 'caído', 'paralizado'].some((word) => q.includes(word))) return 'alta';
+  if (['no puedo', 'bloqueado', 'bloqueada', 'no funciona', 'falla', 'error', 'intermitente', 'lento', 'no carga', 'no conecta', 'sin acceso'].some((word) => q.includes(word))) return 'media';
   return 'baja';
+}
+
+function normalizePriority(text) {
+  const q = lower(text);
+  if (['alta', 'alto', 'urgente', 'critica', 'crítica', 'critico', 'crítico', 'grave'].some((word) => q.includes(word))) return 'alta';
+  if (['media', 'medio', 'moderada', 'moderado', 'intermedia', 'intermedio'].some((word) => q.includes(word))) return 'media';
+  if (['baja', 'bajo', 'menor', 'leve'].some((word) => q.includes(word))) return 'baja';
+  return '';
+}
+
+function normalizeCategory(text) {
+  const raw = normalize(text);
+  const q = lower(raw);
+  const direct = CATEGORIES.find((category) => lower(category) === q);
+  if (direct) return direct;
+  const inferred = inferCategory(raw);
+  return inferred || '';
+}
+
+function normalizeTicketField(text) {
+  const q = lower(text)
+    .replace(/[¿?.,:;]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (['prioridad', 'urgencia', 'impacto', 'severidad'].some((word) => q.includes(word))) return 'prioridad';
+  if (['categoria', 'categoría', 'tipo'].some((word) => q.includes(word))) return 'categoria';
+  if (['descripcion', 'descripción', 'detalle', 'problema'].some((word) => q.includes(word))) return 'descripcion';
+  if (['titulo', 'título', 'asunto'].some((word) => q.includes(word))) return 'titulo';
+  if (['aula', 'salon', 'salón', 'laboratorio', 'lab', 'oficina', 'ambiente', 'lugar'].some((word) => q.includes(word))) return 'aula';
+  if (['edificio', 'bloque', 'pabellon', 'pabellón'].some((word) => q.includes(word))) return 'edificio';
+  return '';
+}
+
+function normalizeFieldValue(field, rawValue) {
+  const value = normalize(rawValue).replace(/[.。]+$/, '').trim();
+  if (field === 'prioridad') return normalizePriority(value);
+  if (field === 'categoria') return normalizeCategory(value);
+  if (field === 'aula') return inferAula(value) || capitalize(value);
+  if (field === 'edificio') return inferEdificio(value) || capitalize(value);
+  return value;
+}
+
+function parseTicketFieldUpdate(text, fallbackTicketId = '') {
+  const ticketMatch = text.match(/\bTKT-\d+\b/i);
+  const ticketId = ticketMatch?.[0]?.toUpperCase() || fallbackTicketId;
+  if (!ticketId) return null;
+
+  const directPriority = text.match(/\bTKT-\d+\b.*?(?:prioridad|urgencia|impacto|severidad)\s+(?:a|por|como|=)?\s*(alta|media|baja|urgente|critica|crítica|critico|crítico|grave|moderada|moderado|leve)\b/i);
+  if (directPriority) {
+    return { ticketId, field: 'prioridad', value: directPriority[1] };
+  }
+
+  const implicitPriority = fallbackTicketId && text.match(/(?:prioridad|urgencia|impacto|severidad)\s+(?:a|por|como|=)?\s*(alta|media|baja|urgente|critica|crítica|critico|crítico|grave|moderada|moderado|leve)\b/i);
+  if (implicitPriority) {
+    return { ticketId, field: 'prioridad', value: implicitPriority[1] };
+  }
+
+  if (!/(?:modificar|cambiar|actualizar|corregir|editar|poner|pon|subir|bajar|establecer)/i.test(text)) return null;
+
+  const patterns = [
+    /(?:modificar|cambiar|actualizar|corregir|editar|poner|pon|establecer)\s+(?:el|la)?\s*([a-záéíóúñ_ ]+?)\s+(?:del|de|en)?\s*(TKT-\d+)\s+(?:a|por|como|=)\s+(.+)/i,
+    /(?:modificar|cambiar|actualizar|corregir|editar)\s+(TKT-\d+)\s+([a-záéíóúñ_ ]+?)\s+(?:a|por|como|=)\s+(.+)/i,
+    /(?:modificar|cambiar|actualizar|corregir|editar|poner|pon|establecer)\s+(?:el|la)?\s*([a-záéíóúñ_ ]+?)\s+(?:a|por|como|=)\s+(.+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const firstTicketIndex = match.findIndex((part) => /^TKT-\d+$/i.test(part || ''));
+    const rawField = firstTicketIndex === 1 ? match[2] : match[1];
+    const rawValue = firstTicketIndex === 1 || firstTicketIndex === 2 ? match[3] : match[2];
+    const field = normalizeTicketField(rawField || 'prioridad');
+    if (!field || !TICKET_FIELDS.includes(field)) continue;
+    return { ticketId, field, value: rawValue };
+  }
+
+  const field = normalizeTicketField(text);
+  if (!field || !TICKET_FIELDS.includes(field)) return null;
+  const afterTicket = ticketMatch ? text.slice(ticketMatch.index + ticketMatch[0].length) : text;
+  const valueMatch = afterTicket.match(/(?:a|por|como|=)\s+(.+)/i);
+  return valueMatch ? { ticketId, field, value: valueMatch[1] } : null;
 }
 
 function normalizeState(text) {
