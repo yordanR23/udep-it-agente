@@ -785,33 +785,6 @@ export default function App() {
     downloadCanvas(canvas, `grafico-circular-${type}.png`);
   }
 
-  function drawCircularChart(ctx, tickets, cx, cy, radius, type = 'estado') {
-    const items = type === 'prioridad' ? PRIORITIES : STATES;
-    const colors = type === 'prioridad' ? ['#ef4444', '#f59e0b', '#10b981'] : ['#dc2626', '#d97706', '#16a34a', '#2563eb'];
-    const counts = items.map((item) => tickets.filter((ticket) => (type === 'prioridad' ? ticket.prioridad === item : ticket.estado === item)).length);
-    const total = Math.max(counts.reduce((sum, count) => sum + count, 0), 1);
-    let start = -Math.PI / 2;
-    for (let index = 0; index < items.length; index += 1) {
-      const count = counts[index];
-      const angle = (count / total) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, radius, start, start + angle);
-      ctx.closePath();
-      ctx.fillStyle = colors[index];
-      ctx.fill();
-      start += angle;
-    }
-    ctx.font = '12px sans-serif';
-    items.forEach((item, index) => {
-      ctx.fillStyle = colors[index];
-      ctx.fillRect(cx - radius, cy + radius + 24 + index * 20, 12, 12);
-      ctx.fillStyle = '#475569';
-      const label = type === 'prioridad' ? item : statusLabel(item);
-      ctx.fillText(`${label}: ${counts[index]}`, cx - radius + 18, cy + radius + 34 + index * 20);
-    });
-  }
-
   function downloadReportPdf() {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
     const title = 'Reporte general de Mesa de Ayuda';
@@ -1379,6 +1352,35 @@ function drawTimeSeries(ctx, tickets, x, y, width, height) {
   ctx.fillStyle = '#475569';
   ctx.font = '12px sans-serif';
   labels.slice(0, 6).forEach((label, index) => ctx.fillText(label, x + index * 90, y + height + 22));
+}
+
+function drawCircularChart(ctx, tickets, cx, cy, radius, type = 'estado') {
+  const items = type === 'prioridad' ? PRIORITIES : STATES;
+  const colors = type === 'prioridad' ? ['#ef4444', '#f59e0b', '#10b981'] : ['#dc2626', '#d97706', '#16a34a', '#2563eb'];
+  const counts = items.map((item) => tickets.filter((ticket) => (type === 'prioridad' ? ticket.prioridad === item : ticket.estado === item)).length);
+  const total = Math.max(counts.reduce((sum, count) => sum + count, 0), 1);
+  let start = -Math.PI / 2;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const count = counts[index];
+    const angle = (count / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, radius, start, start + angle);
+    ctx.closePath();
+    ctx.fillStyle = colors[index];
+    ctx.fill();
+    start += angle;
+  }
+
+  ctx.font = '12px sans-serif';
+  items.forEach((item, index) => {
+    ctx.fillStyle = colors[index];
+    ctx.fillRect(cx - radius, cy + radius + 24 + index * 20, 12, 12);
+    ctx.fillStyle = '#475569';
+    const label = type === 'prioridad' ? item : statusLabel(item);
+    ctx.fillText(`${label}: ${counts[index]}`, cx - radius + 18, cy + radius + 34 + index * 20);
+  });
 }
 
   function downloadCanvas(canvas, filename) {
